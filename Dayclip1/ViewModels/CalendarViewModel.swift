@@ -74,7 +74,7 @@ final class CalendarViewModel: ObservableObject {
             currentMonth = nextMonth
         }
 
-        months = Array(generatedMonths.reversed())
+        months = generatedMonths  // 오래된 월이 위에, 최근 월이 아래에
     }
 
     func setClip(_ clip: DayClip) {

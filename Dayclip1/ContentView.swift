@@ -28,49 +28,9 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 24) {
-                        ForEach(viewModel.months) { month in
-                            CalendarMonthPage(
-                                month: month,
-                                viewportHeight: geometry.size.height,
-                                viewportWidth: geometry.size.width,
-                                clipCount: viewModel.clipCount(for: month),
-                                onDaySelected: handleDaySelection
-                            )
-                                .frame(width: geometry.size.width)
-                        }
-                    }
-                    .padding(.vertical, 32)
-                    .padding(.bottom, 100)
-                }
-                
-                VStack {
-                    Spacer()
-                    Button {
-                        startTimelinePlayback()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Play")
-                                .font(.headline.weight(.semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(
-                            Capsule()
-                                .stroke(Color.white, lineWidth: 2)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(viewModel.allClips().isEmpty)
-                    .opacity(viewModel.allClips().isEmpty ? 0.4 : 1.0)
-                    .padding(.bottom, 40)
-                   
-                }
+            ZStack(alignment: .bottom) {
+                calendarScrollView(geometry: geometry)
+                playButton
             }
             .photosPicker(
                 isPresented: $isShowingPicker,
@@ -150,6 +110,76 @@ struct ContentView: View {
        
         .task {
             await viewModel.loadPersistedClips()
+        }
+    }
+    
+    @ViewBuilder
+    private func calendarScrollView(geometry: GeometryProxy) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 24) {
+                    ForEach(viewModel.months) { month in
+                        CalendarMonthPage(
+                            month: month,
+                            viewportHeight: geometry.size.height,
+                            viewportWidth: geometry.size.width,
+                            clipCount: viewModel.clipCount(for: month),
+                            onDaySelected: handleDaySelection
+                        )
+                        .frame(width: geometry.size.width)
+                        .id(month.id)
+                    }
+                }
+                .padding(.vertical, 32)
+                .padding(.bottom, 100)
+            }
+            .onAppear {
+                scrollToCurrentMonth(proxy: proxy)
+            }
+            .onChange(of: viewModel.months) { _, _ in
+                scrollToCurrentMonth(proxy: proxy)
+            }
+        }
+    }
+    
+    private var playButton: some View {
+        Button {
+            startTimelinePlayback()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "play.circle")
+                    .font(.system(size: 16, weight: .medium))
+                Text("Play")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .foregroundStyle(.white)
+            .frame(width:82,height:42)
+//            .padding(.horizontal, 16)
+           .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .glassEffect()
+//                    .stroke(Color.white, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.clear)
+        .disabled(viewModel.allClips().isEmpty)
+        .opacity(viewModel.allClips().isEmpty ? 0.0 : 1.0)
+        .padding(.bottom, 24)
+    }
+    
+    private func scrollToCurrentMonth(proxy: ScrollViewProxy) {
+        let today = Date()
+        let calendar = Calendar.current
+        
+        // 현재 월과 일치하는 첫 번째 월 찾기
+        if let currentMonth = viewModel.months.first(where: { month in
+            calendar.isDate(month.date, equalTo: today, toGranularity: .month)
+        }) {
+            withAnimation {
+                proxy.scrollTo(currentMonth.id, anchor: .top)
+            }
         }
     }
 

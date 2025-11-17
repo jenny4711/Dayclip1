@@ -33,7 +33,7 @@ struct CalendarMonthPage: View {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(month.title)
-                        .font(.title3.weight(.semibold))
+                        .font(.system(size: 14).weight(.medium))
                         .foregroundStyle(.white)
                 }
 
@@ -45,7 +45,7 @@ struct CalendarMonthPage: View {
                 HStack(spacing: cellSpacing) {
                     ForEach(Weekday.allCases, id: \.self) { weekday in
                         Text(weekday.displaySymbol)
-                            .font(.caption)
+                            .font(.system(size: 10,weight: .medium))
                             .foregroundStyle(.gray)
                             .frame(maxWidth: .infinity)
                     }
@@ -114,7 +114,7 @@ struct DayCellView: View {
 
             // Date number overlay - centered
             Text(day.displayText)
-                .font(.footnote.weight(.semibold))
+                .font(.system(size: 12).weight(.medium))
                 .foregroundStyle(day.thumbnail != nil ? .white : day.textColor)
                 .shadow(color: Color.black.opacity(day.thumbnail != nil ? 0.5 : 0.35), radius: 1, x: 0, y: 0)
         }

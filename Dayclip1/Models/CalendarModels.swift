@@ -29,7 +29,7 @@ enum Weekday: CaseIterable {
 
 // MARK: - Calendar Month Model
 
-struct CalendarMonth: Identifiable {
+struct CalendarMonth: Identifiable, Equatable {
     let id: UUID
     let date: Date
     let days: [CalendarDay]
@@ -38,6 +38,10 @@ struct CalendarMonth: Identifiable {
         self.id = id
         self.date = date
         self.days = days
+    }
+    
+    static func == (lhs: CalendarMonth, rhs: CalendarMonth) -> Bool {
+        lhs.id == rhs.id && lhs.date == rhs.date
     }
 
     var title: String {
@@ -67,7 +71,7 @@ struct CalendarMonth: Identifiable {
 
 // MARK: - Calendar Day Model
 
-struct CalendarDay: Identifiable {
+struct CalendarDay: Identifiable, Equatable {
     let id: UUID
     let date: Date
     let kind: DayKind
@@ -84,6 +88,12 @@ struct CalendarDay: Identifiable {
         self.isFuture = isFuture
         self.hasClip = hasClip
         self.thumbnail = thumbnail
+    }
+    
+    static func == (lhs: CalendarDay, rhs: CalendarDay) -> Bool {
+        lhs.id == rhs.id && lhs.date == rhs.date && lhs.kind == rhs.kind && 
+        lhs.isToday == rhs.isToday && lhs.isFuture == rhs.isFuture && lhs.hasClip == rhs.hasClip
+        // thumbnail은 UIImage?이므로 Equatable이 아니므로 비교하지 않음
     }
 
     var displayText: String {
@@ -130,7 +140,7 @@ struct CalendarDay: Identifiable {
         CalendarDay(id: id, date: date, kind: kind, isToday: isToday, isFuture: isFuture, hasClip: newValue, thumbnail: thumbnail)
     }
 
-    enum DayKind {
+    enum DayKind: Equatable {
         case previous
         case current
         case next
