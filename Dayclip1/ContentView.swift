@@ -30,7 +30,7 @@ struct ContentView: View {
         GeometryReader { geometry in
             ZStack {
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 40) {
+                    LazyVStack(spacing: 24) {
                         ForEach(viewModel.months) { month in
                             CalendarMonthPage(
                                 month: month,
@@ -51,16 +51,25 @@ struct ContentView: View {
                     Button {
                         startTimelinePlayback()
                     } label: {
-                        Label("전체 타임라인 재생", systemImage: "play.circle.fill")
-                            .font(.headline.weight(.semibold))
-                            .labelStyle(.titleAndIcon)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 14)
+                        HStack(spacing: 8) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Play")
+                                .font(.headline.weight(.semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule()
+                                .stroke(Color.white, lineWidth: 2)
+                        )
                     }
-                    .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.25)))
+                    .buttonStyle(.plain)
                     .disabled(viewModel.allClips().isEmpty)
                     .opacity(viewModel.allClips().isEmpty ? 0.4 : 1.0)
                     .padding(.bottom, 40)
+                   
                 }
             }
             .photosPicker(

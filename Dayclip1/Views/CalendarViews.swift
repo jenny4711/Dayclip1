@@ -62,9 +62,10 @@ struct CalendarMonthPage: View {
             }
             .padding(.horizontal, horizontalPadding)
 
-            Spacer(minLength: 0)
+            // Spacer(minLength: 0)  // Removed to use minimum height only
         }
-        .frame(height: viewportHeight)
+        .frame(minHeight: 0)  // Use minimum height instead of fixed viewportHeight
+//        .background(.red)
         
     }
 }
@@ -95,10 +96,14 @@ struct DayCellView: View {
     }
 
     private var cellBody: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(day.backgroundColor)
+        ZStack {
+            // Background color - only show if no thumbnail
+            if day.thumbnail == nil {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(day.backgroundColor)
+            }
 
+            // Thumbnail - fill entire cell if present
             if let thumbnail = day.thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
@@ -107,33 +112,11 @@ struct DayCellView: View {
                     .clipped()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(day.displayText)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(day.textColor)
-                    .shadow(color: Color.black.opacity(0.35), radius: 1, x: 0, y: 0)
-
-                Spacer()
-
-                if day.hasClip {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "video.fill")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .shadow(color: Color.black.opacity(0.5), radius: 2, x: 0, y: 0)
-                    }
-                } else if day.shouldShowPlus {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "plus")
-                            .font(.headline)
-                            .foregroundStyle(.gray)
-                    }
-                }
-            }
-            .padding(10)
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            // Date number overlay - centered
+            Text(day.displayText)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(day.thumbnail != nil ? .white : day.textColor)
+                .shadow(color: Color.black.opacity(day.thumbnail != nil ? 0.5 : 0.35), radius: 1, x: 0, y: 0)
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
