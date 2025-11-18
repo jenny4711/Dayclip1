@@ -14,35 +14,18 @@ import UniformTypeIdentifiers
 struct MultiClipEditorView: View {
     let draft: EditorDraft
     let onCancel: () -> Void
-    let onComplete: (EditorCompositionDraft) -> Void
+    let onComplete: (EditorCompositionDraft?) -> Void
+    let onDelete: () -> Void
 
     @StateObject private var viewModel: MultiClipEditorViewModel
     @State private var muteAudio = false
-    @State private var selectedTrackID: UUID? = nil
-    @State private var trackVolume: Double = 0.6
-    @State private var userTrackOptions: [BackgroundTrackOption] = []
-    @State private var showAudioImporter = false
-    @State private var isImportingAudio = false
 
-    private var allTrackOptions: [BackgroundTrackOption] {
-        BackgroundTrackOption.builtInOptions + userTrackOptions
-    }
-
-    init(draft: EditorDraft, onCancel: @escaping () -> Void, onComplete: @escaping (EditorCompositionDraft) -> Void) {
+    init(draft: EditorDraft, onCancel: @escaping () -> Void, onComplete: @escaping (EditorCompositionDraft?) -> Void, onDelete: @escaping () -> Void) {
         self.draft = draft
         self.onCancel = onCancel
         self.onComplete = onComplete
+        self.onDelete = onDelete
         _viewModel = StateObject(wrappedValue: MultiClipEditorViewModel(draft: draft))
-    }
-
-    private var selectedTrackOption: BackgroundTrackOption? {
-        guard let id = selectedTrackID else { return nil }
-        return allTrackOptions.first(where: { $0.id == id })
-    }
-
-    private var backgroundSelection: BackgroundTrackSelection? {
-        guard let option = selectedTrackOption else { return nil }
-        return BackgroundTrackSelection(option: option, volume: Float(trackVolume))
     }
 
     var body: some View {
@@ -81,19 +64,23 @@ struct MultiClipEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("취소") {
+                    Button {
                         viewModel.stopPlayback()
                         onCancel()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.white)
                     }
+                    .padding(.leading, 16)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("완료") {
-                        if let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: backgroundSelection) {
-                            viewModel.stopPlayback()
-                            onComplete(draft)
-                        }
+                    Button("Done") {
+                        viewModel.stopPlayback()
+                        let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
+                        onComplete(draft)
                     }
-                    .disabled(!viewModel.hasSelection || viewModel.isLoading || viewModel.isBuildingPreview)
+                    .disabled(viewModel.isLoading || viewModel.isBuildingPreview)
+                    .padding(.trailing, 16)
                 }
             }
         }
@@ -109,7 +96,7 @@ struct MultiClipEditorView: View {
     private var formattedDate: String {
         let formatter = DateFormatter()
         formatter.locale = Locale.current
-        formatter.dateFormat = "yyyy. MM. dd"
+        formatter.dateFormat = "MMMM d, yyyy"
         return formatter.string(from: draft.date)
     }
 
@@ -132,102 +119,61 @@ struct MultiClipEditorView: View {
                 if viewModel.isBuildingPreview {
                     ProgressView()
                 }
-            }
-            .padding(.horizontal)
-
-            HStack {
-                Button {
-                    viewModel.togglePlayback()
-                } label: {
-                    Label(viewModel.isPlaying ? "일시정지" : "재생", systemImage: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                
+                // 재생 버튼 오버레이 (일시정지 상태일 때만 표시)
+                if !viewModel.isLoading && viewModel.hasSelection && !viewModel.isBuildingPreview && !viewModel.isPlaying {
+                    Button {
+                        viewModel.togglePlayback()
+                    } label: {
+                        Image("stop")
+                            .renderingMode(.original)
+                            .resizable()
+                            .interpolation(.none)
+                            .antialiased(false)
+                            .scaledToFit()
+                            .frame(width: 60, height: 60)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.15)))
-                .disabled(viewModel.player.currentItem == nil)
+            }
+            .padding(.horizontal, 54)
+
+            // 비디오 아래 컨트롤 바
+            HStack {
+                // 음소거 토글 버튼 (왼쪽)
+                Button {
+                    muteAudio.toggle()
+                    Task { await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio) }
+                } label: {
+                    Image(muteAudio ? "soundOFF" : "soundON")
+                        .renderingMode(.original)
+                        .resizable()
+                        .interpolation(.none)
+                        .antialiased(false)
+                        .scaledToFit()
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
 
                 Spacer()
 
+                // 휴지통 버튼 (오른쪽)
                 Button {
-                    Task { await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio, backgroundTrack: .some(backgroundSelection)) }
+                    viewModel.stopPlayback()
+                    onDelete()
                 } label: {
-                    Label("미리보기 갱신", systemImage: "arrow.clockwise")
+                    Image(systemName: "trash")
+                        .foregroundStyle(.white)
+                        .font(.system(size: 20))
                 }
-                .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.1)))
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal)
-
-            Toggle(isOn: $muteAudio) {
-                Label(muteAudio ? "음소거 켜짐" : "음소거 해제", systemImage: muteAudio ? "speaker.slash.fill" : "speaker.wave.2.fill")
-            }
-            .toggleStyle(SwitchToggleStyle(tint: .accentColor))
-            .padding(.horizontal)
-            .padding(.bottom, 4)
-            .onChange(of: muteAudio) { _, newValue in
-                Task { await viewModel.rebuildPreviewPlayer(muteOriginal: newValue) }
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("배경 음악", selection: $selectedTrackID) {
-                    Text("없음")
-                        .tag(nil as UUID?)
-                    ForEach(allTrackOptions) { option in
-                        Text(option.displayName)
-                            .tag(option.id as UUID?)
-                    }
-                }
-                .pickerStyle(.menu)
-
-                if selectedTrackOption != nil {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Label("음악 볼륨", systemImage: "music.note")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(String(format: "%.0f%%", trackVolume * 100))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: $trackVolume, in: 0...1)
-                            .onChange(of: trackVolume) { _, _ in
-                                Task { await viewModel.rebuildPreviewPlayer(backgroundTrack: .some(backgroundSelection)) }
-                            }
-                    }
-                }
-
-                Button {
-                    showAudioImporter = true
-                } label: {
-                    Label(isImportingAudio ? "불러오는 중..." : "파일에서 선택", systemImage: "folder.badge.plus")
-                }
-                .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.08)))
-                .disabled(isImportingAudio)
-            }
-            .padding(.horizontal)
-            .onChange(of: selectedTrackID) { _, newValue in
-                if let id = newValue, let option = allTrackOptions.first(where: { $0.id == id }) {
-                    trackVolume = option.defaultVolume
-                }
-                Task { await viewModel.rebuildPreviewPlayer(backgroundTrack: .some(backgroundSelection)) }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
         }
         .task {
-            userTrackOptions = VideoStorageManager.shared.loadImportedBackgroundTracks()
-            if let option = selectedTrackOption {
-                trackVolume = option.defaultVolume
-            }
             activatePlaybackAudioSession()
-            await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio, backgroundTrack: .some(backgroundSelection))
-        }
-        .fileImporter(isPresented: $showAudioImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                Task {
-                    await importBackgroundTrack(from: url)
-                }
-            case .failure(let error):
-                viewModel.errorMessage = error.localizedDescription
-            }
+            await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio, backgroundTrack: nil)
         }
     }
 
@@ -240,21 +186,27 @@ struct MultiClipEditorView: View {
                 Text(viewModel.trimDescription(for: clip))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button {
-                    viewModel.rotateClip(clip)
-                } label: {
-                    Image(systemName: "rotate.right")
-                        .font(.headline)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .padding(.leading, 8)
             }
 
-            TimelineTrimView(clip: clip) { newStart in
-                viewModel.updateTrimStart(clipID: clip.id, start: newStart)
-            }
+            TimelineTrimView(
+                clip: clip,
+                isSelected: viewModel.selectedClipID == clip.id,
+                onTrimStartChange: { newStart in
+                    viewModel.updateTrimStart(clipID: clip.id, start: newStart)
+                },
+                onDragEnd: {
+                    if viewModel.selectedClipID == clip.id {
+                        Task {
+                            await viewModel.playSelected2SecondRange(for: clip.id)
+                        }
+                    }
+                }
+            )
             .frame(height: 86)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                viewModel.selectedClipID = clip.id
+            }
 
             HStack {
                 Label("영상 길이 \(viewModel.formatDuration(clip.duration))", systemImage: "film")
@@ -264,44 +216,15 @@ struct MultiClipEditorView: View {
             }
         }
     }
-
-    private func importBackgroundTrack(from url: URL) async {
-        await MainActor.run {
-            isImportingAudio = true
-        }
-
-        do {
-            let option = try VideoStorageManager.shared.importBackgroundTrack(from: url)
-            let selection = await MainActor.run { () -> BackgroundTrackSelection? in
-                let resolvedOption: BackgroundTrackOption
-                if let existingIndex = userTrackOptions.firstIndex(where: { $0.source == option.source }) {
-                    resolvedOption = userTrackOptions[existingIndex]
-                } else {
-                    userTrackOptions.append(option)
-                    resolvedOption = option
-                }
-                selectedTrackID = resolvedOption.id
-                trackVolume = resolvedOption.defaultVolume
-                return backgroundSelection
-            }
-            await viewModel.rebuildPreviewPlayer(backgroundTrack: .some(selection))
-        } catch {
-            await MainActor.run {
-                viewModel.errorMessage = error.localizedDescription
-            }
-        }
-
-        await MainActor.run {
-            isImportingAudio = false
-        }
-    }
 }
 
 // MARK: - Timeline Trim View
 
 struct TimelineTrimView: View {
     let clip: MultiClipEditorViewModel.EditorClip
+    let isSelected: Bool
     let onTrimStartChange: (Double) -> Void
+    let onDragEnd: () -> Void
 
     @State private var dragOrigin: CGFloat?
     @State private var previewImage: UIImage?
@@ -362,12 +285,29 @@ struct TimelineTrimView: View {
                 .frame(height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.accentColor, lineWidth: 3)
-                    .background(
+                // 2초 선택 박스 (노란색) - 선택된 클립에만 표시
+                if isSelected {
+                    ZStack {
+                        // 배경
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.22))
-                    )
+                            .fill(Color.yellow.opacity(0.22))
+                            .frame(width: selectionWidth, height: 80)
+                        
+                        // 전체 테두리 (바깥쪽만 둥글게, 안쪽은 직각)
+                        SelectionBoxBorderShape(
+                            width: selectionWidth,
+                            height: 80,
+                            cornerRadius: 12,
+                            leftRightBorderWidth: 8,
+                            topBottomBorderWidth: 4
+                        )
+                        .fill(Color.yellow, style: FillStyle(eoFill: true))
+                        
+                        // 양방향 화살표 아이콘
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(.yellow)
+                    }
                     .frame(width: selectionWidth, height: 80)
                     .offset(x: selectionOffset)
                     .gesture(
@@ -384,8 +324,10 @@ struct TimelineTrimView: View {
                             .onEnded { _ in
                                 dragOrigin = nil
                                 showPreview = false
+                                onDragEnd()
                             }
                     )
+                }
 
                 if showPreview, let previewImage {
                     let previewWidth: CGFloat = 120
@@ -412,13 +354,18 @@ struct TimelineTrimView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        guard isSelected else { return }
                         let rawOffset = min(max(value.location.x - selectionWidth / 2, 0), travel)
                         let newRatio = travel > 0 ? Double(rawOffset / travel) : 0
                         let newStart = newRatio * maxStart
                         presentPreview(newStart, rawOffset)
+                        onTrimStartChange(newStart)
                     }
                     .onEnded { _ in
                         showPreview = false
+                        if isSelected {
+                            onDragEnd()
+                        }
                     }
             )
         }
@@ -431,4 +378,42 @@ struct TimelineTrimView: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 }
+
+// MARK: - Selection Box Border Shape
+
+struct SelectionBoxBorderShape: Shape {
+    let width: CGFloat
+    let height: CGFloat
+    let cornerRadius: CGFloat
+    let leftRightBorderWidth: CGFloat
+    let topBottomBorderWidth: CGFloat
+    
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = cornerRadius
+        let lrWidth = leftRightBorderWidth
+        let tbWidth = topBottomBorderWidth
+        
+        // 외부 경로 (바깥쪽 둥근 사각형) - 시계방향
+        let outerRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+        path.addRoundedRect(in: outerRect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+        
+        // 내부 경로 (안쪽 직각 사각형) - 반시계방향으로 추가하여 홀 생성
+        let innerRect = CGRect(
+            x: lrWidth,
+            y: tbWidth,
+            width: width - lrWidth * 2,
+            height: height - tbWidth * 2
+        )
+        // 반시계방향으로 직사각형 추가
+        path.move(to: CGPoint(x: innerRect.minX, y: innerRect.minY))
+        path.addLine(to: CGPoint(x: innerRect.minX, y: innerRect.maxY))
+        path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.maxY))
+        path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.minY))
+        path.closeSubpath()
+        
+        return path
+    }
+}
+
 

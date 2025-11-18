@@ -46,6 +46,7 @@ final class MultiClipEditorViewModel: ObservableObject {
     }()
     @Published var isPlaying = false
     @Published var isBuildingPreview = false
+    @Published var selectedClipID: UUID? = nil
 
     private let draft: EditorDraft
     private var currentMuteOriginal = false
@@ -53,6 +54,7 @@ final class MultiClipEditorViewModel: ObservableObject {
     private var rebuildTask: Task<AVPlayerItem?, Never>?
     private var thumbnailTasks: [Task<Void, Never>] = []
     private let maxTimelineFrames = 80
+    private let defaultTrimDuration: Double = 2.0
 
     init(draft: EditorDraft) {
         self.draft = draft
@@ -148,6 +150,49 @@ final class MultiClipEditorViewModel: ObservableObject {
     func stopPlayback() {
         player.pause()
         isPlaying = false
+    }
+    
+    func playSelected2SecondRange(for clipID: UUID) async {
+        guard let clip = clips.first(where: { $0.id == clipID }) else { return }
+        guard let range = effectiveTrimRange(for: clip) else { return }
+        
+        // 선택된 클립의 2초 구간만 재생하기 위해 새로운 플레이어 아이템 생성
+        let asset = clip.asset
+        let composition = AVMutableComposition()
+        
+        guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
+              let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            return
+        }
+        
+        do {
+            try compositionVideoTrack.insertTimeRange(range, of: videoTrack, at: .zero)
+            
+            let audioTracks = try? await asset.loadTracks(withMediaType: .audio)
+            if let audioTrack = audioTracks?.first,
+               let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                try compositionAudioTrack.insertTimeRange(range, of: audioTrack, at: .zero)
+            }
+            
+            let item = AVPlayerItem(asset: composition)
+            await MainActor.run {
+                player.replaceCurrentItem(with: item)
+                player.seek(to: .zero)
+                player.play()
+                isPlaying = true
+            }
+            
+            // 2초 후 자동 정지
+            try? await Task.sleep(nanoseconds: UInt64(range.duration.seconds * 1_000_000_000))
+            await MainActor.run {
+                if isPlaying {
+                    player.pause()
+                    isPlaying = false
+                }
+            }
+        } catch {
+            // 에러 처리
+        }
     }
 
     func makeCompositionDraft(muteOriginalAudio: Bool, backgroundTrack: BackgroundTrackSelection?) -> EditorCompositionDraft? {
@@ -249,6 +294,11 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         clips = built
         isLoading = false
+        
+        // 첫 번째 클립을 기본 선택으로 설정
+        if let firstClip = built.first {
+            selectedClipID = firstClip.id
+        }
 
         // 비동기 작업들을 백그라운드에서 처리
         let draftDate = draft.date

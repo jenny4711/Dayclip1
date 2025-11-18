@@ -122,6 +122,12 @@ struct ContentView: View {
                         Task {
                             await handleEditorCompletion(composition)
                         }
+                    },
+                    onDelete: {
+                        editorDraft = nil
+                        Task {
+                            await deleteClipForDate(draft.date)
+                        }
                     }
                 )
             }
@@ -301,8 +307,40 @@ struct ContentView: View {
             isSavingClip = false
         }
     }
+    
+    private func deleteClipForDate(_ date: Date) async {
+        await MainActor.run {
+            isSavingClip = true
+        }
 
-    private func handleEditorCompletion(_ composition: EditorCompositionDraft) async {
+        do {
+            if let clip = viewModel.clip(for: date) {
+                try VideoStorageManager.shared.removeClip(clip)
+                VideoStorageManager.shared.clearEditingSession(for: date)
+                try await ClipStore.shared.deleteClip(for: date)
+                await MainActor.run {
+                    viewModel.removeClip(for: date)
+                    resetPendingSelection()
+                }
+            } else {
+                // 클립이 없어도 편집 세션은 정리
+                VideoStorageManager.shared.clearEditingSession(for: date)
+                await MainActor.run {
+                    resetPendingSelection()
+                }
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = "영상을 삭제하지 못했습니다.\n\(error.localizedDescription)"
+            }
+        }
+
+        await MainActor.run {
+            isSavingClip = false
+        }
+    }
+
+    private func handleEditorCompletion(_ composition: EditorCompositionDraft?) async {
         let day = await MainActor.run { pendingDaySelection }
 
         guard let day else {
@@ -318,16 +356,31 @@ struct ContentView: View {
         }
 
         do {
-            let clip = try await VideoStorageManager.shared.exportComposition(
-                draft: composition,
-                date: day.date
-            )
+            if let composition = composition {
+                // 클립이 있는 경우: 저장
+                let clip = try await VideoStorageManager.shared.exportComposition(
+                    draft: composition,
+                    date: day.date
+                )
 
-            try await ClipStore.shared.upsert(clip.metadata)
+                try await ClipStore.shared.upsert(clip.metadata)
 
-            await MainActor.run {
-                viewModel.setClip(clip)
-                resetPendingSelection()
+                await MainActor.run {
+                    viewModel.setClip(clip)
+                    resetPendingSelection()
+                }
+            } else {
+                // 클립이 없는 경우: 빈 상태로 저장 (기존 클립 삭제)
+                if let existingClip = viewModel.clip(for: day.date) {
+                    try VideoStorageManager.shared.removeClip(existingClip)
+                    VideoStorageManager.shared.clearEditingSession(for: day.date)
+                    try await ClipStore.shared.deleteClip(for: day.date)
+                }
+                
+                await MainActor.run {
+                    viewModel.removeClip(for: day.date)
+                    resetPendingSelection()
+                }
             }
         } catch {
             await MainActor.run {
