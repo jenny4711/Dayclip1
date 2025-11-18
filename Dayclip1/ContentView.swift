@@ -163,10 +163,10 @@ struct ContentView: View {
                }
                .background(Color.black.ignoresSafeArea())
                .onAppear {
-                   scrollToCurrentMonth(proxy: proxy)
+                   scrollToCurrentMonth(proxy: proxy, animated: false)
                }
                .onChange(of: viewModel.months) { _, _ in
-                   scrollToCurrentMonth(proxy: proxy)
+                   scrollToCurrentMonth(proxy: proxy, animated: false)
                }
            }
        }
@@ -197,7 +197,7 @@ struct ContentView: View {
     
     
     
-    private func scrollToCurrentMonth(proxy: ScrollViewProxy) {
+    private func scrollToCurrentMonth(proxy: ScrollViewProxy, animated: Bool = false) {
         let today = Date()
         let calendar = Calendar.current
         
@@ -205,7 +205,11 @@ struct ContentView: View {
         if let currentMonth = viewModel.months.first(where: { month in
             calendar.isDate(month.date, equalTo: today, toGranularity: .month)
         }) {
-            withAnimation {
+            if animated {
+                withAnimation {
+                    proxy.scrollTo(currentMonth.id, anchor: .top)
+                }
+            } else {
                 proxy.scrollTo(currentMonth.id, anchor: .top)
             }
         }
