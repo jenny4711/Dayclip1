@@ -36,7 +36,9 @@ struct CalendarMonthPage: View {
                         .font(.system(size: 14).weight(.medium))
                         .foregroundStyle(.white)
                 }
-
+                Text(month.yearTitle)
+                    .font(.system(size: 14).weight(.medium))
+                    .foregroundStyle(.gray)
                 Spacer()
             }
             .padding(.horizontal, horizontalPadding)

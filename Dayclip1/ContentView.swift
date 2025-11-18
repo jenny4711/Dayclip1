@@ -26,12 +26,22 @@ struct ContentView: View {
     @State private var editorDraft: EditorDraft?
     @State private var monthlyPlaybackSession: MonthlyPlaybackSession?
 
+
+    
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .bottom) {
-                calendarScrollView(geometry: geometry)
-                playButton
+            GeometryReader { geometry in
+                ZStack(alignment: .bottom) {
+                    // 달력 스크롤
+                    calendarScrollView(geometry: geometry)
+
+                    // 플레이 버튼
+                    playButton
+                        // 화면 맨 아래 ↔ 버튼 아래 = 24
+                        .padding(.bottom, 0)
+                }
+                .background(Color.black.ignoresSafeArea())
             }
+            // MARK: - 사진 선택
             .photosPicker(
                 isPresented: $isShowingPicker,
                 selection: $selectedPickerItems,
@@ -47,6 +57,8 @@ struct ContentView: View {
                     resetPendingSelection()
                 }
             }
+
+            // MARK: - 교체 알림
             .alert(
                 "기존 영상을 교체하시겠습니까?",
                 isPresented: $showReplaceAlert,
@@ -61,113 +73,129 @@ struct ContentView: View {
             } message: { _ in
                 Text("선택한 날짜의 기존 영상을 교체합니다.")
             }
-            .background(Color.black.ignoresSafeArea())
+
+            // MARK: - 에러 알림
+            .alert(
+                "문제가 발생했어요",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { newValue in
+                        if !newValue { errorMessage = nil }
+                    }
+                )
+            ) {
+                Button("확인", role: .cancel) {
+                    errorMessage = nil
+                }
+            } message: {
+                Text(errorMessage ?? "")
+            }
+
+            // MARK: - 로딩 오버레이
             .overlay {
                 if isSavingClip {
                     ZStack {
                         Color.black.opacity(0.35).ignoresSafeArea()
                         ProgressView("영상을 저장 중입니다…")
                             .padding(20)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .background(
+                                .ultraThinMaterial,
+                                in: RoundedRectangle(
+                                    cornerRadius: 16,
+                                    style: .continuous
+                                )
+                            )
                     }
                 }
             }
-        }
-        .alert("문제가 발생했어요", isPresented: Binding(get: {
-            errorMessage != nil
-        }, set: { newValue in
-            if !newValue {
-                errorMessage = nil
-            }
-        }), actions: {
-            Button("확인", role: .cancel) {
-                errorMessage = nil
-            }
-        }, message: {
-            Text(errorMessage ?? "")
-        })
-        .fullScreenCover(item: $editorDraft) { draft in
-            MultiClipEditorView(
-                draft: draft,
-                onCancel: {
-                    editorDraft = nil
-                    resetPendingSelection()
-                },
-                onComplete: { composition in
-                    editorDraft = nil
-                    Task {
-                        await handleEditorCompletion(composition)
+
+            // MARK: - 에디터 / 월별 재생
+            .fullScreenCover(item: $editorDraft) { draft in
+                MultiClipEditorView(
+                    draft: draft,
+                    onCancel: {
+                        editorDraft = nil
+                        resetPendingSelection()
+                    },
+                    onComplete: { composition in
+                        editorDraft = nil
+                        Task {
+                            await handleEditorCompletion(composition)
+                        }
                     }
+                )
+            }
+            .fullScreenCover(item: $monthlyPlaybackSession) { session in
+                MonthlyPlaybackView(session: session) {
+                    monthlyPlaybackSession = nil
                 }
-            )
-        }
-        .fullScreenCover(item: $monthlyPlaybackSession) { session in
-            MonthlyPlaybackView(session: session) {
-                monthlyPlaybackSession = nil
+            }
+            .preferredColorScheme(.dark)
+            .task {
+                await viewModel.loadPersistedClips()
             }
         }
-        .preferredColorScheme(.dark)
-       
-        .task {
-            await viewModel.loadPersistedClips()
-        }
-    }
+    
     
     @ViewBuilder
-    private func calendarScrollView(geometry: GeometryProxy) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 24) {
-                    ForEach(viewModel.months) { month in
-                        CalendarMonthPage(
-                            month: month,
-                            viewportHeight: geometry.size.height,
-                            viewportWidth: geometry.size.width,
-                            clipCount: viewModel.clipCount(for: month),
-                            onDaySelected: handleDaySelection
-                        )
-                        .frame(width: geometry.size.width)
-                        .id(month.id)
-                    }
-                }
-                .padding(.vertical, 32)
-                .padding(.bottom, 100)
-            }
-            .onAppear {
-                scrollToCurrentMonth(proxy: proxy)
-            }
-            .onChange(of: viewModel.months) { _, _ in
-                scrollToCurrentMonth(proxy: proxy)
-            }
-        }
-    }
+       private func calendarScrollView(geometry: GeometryProxy) -> some View {
+           ScrollViewReader { proxy in
+               ScrollView(.vertical, showsIndicators: false) {
+                   LazyVStack(spacing: 24) {
+                       ForEach(viewModel.months) { month in
+                           CalendarMonthPage(
+                               month: month,
+                               viewportHeight: geometry.size.height,
+                               viewportWidth: geometry.size.width,
+                               clipCount: viewModel.clipCount(for: month),
+                               onDaySelected: handleDaySelection
+                           )
+                           .frame(width: geometry.size.width)
+                           .id(month.id)
+                       }
+                   }
+                   // 위 여백
+                   .padding(.top, 32)
+                   // 🔴 중요한 부분:
+                   // 버튼 높이(42) + 달력↔버튼 위 간격(24) + 버튼↔화면 밑 간격(24) = 90
+                   .padding(.bottom, 65)
+                 /* .background(Color.yellow)*/ // 디버그용, 나중에 빼셔도 돼요
+               }
+               .background(Color.black.ignoresSafeArea())
+               .onAppear {
+                   scrollToCurrentMonth(proxy: proxy)
+               }
+               .onChange(of: viewModel.months) { _, _ in
+                   scrollToCurrentMonth(proxy: proxy)
+               }
+           }
+       }
     
     private var playButton: some View {
-        Button {
-            startTimelinePlayback()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "play.circle")
-                    .font(.system(size: 16, weight: .medium))
-                Text("Play")
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundStyle(.white)
-            .frame(width:82,height:42)
-//            .padding(.horizontal, 16)
-           .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .glassEffect()
-//                    .stroke(Color.white, lineWidth: 2)
-            )
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.clear)
-        .disabled(viewModel.allClips().isEmpty)
-        .opacity(viewModel.allClips().isEmpty ? 0.0 : 1.0)
-        .padding(.bottom, 24)
-    }
+           Button {
+               startTimelinePlayback()
+           } label: {
+               HStack(spacing: 8) {
+                   Image(systemName: "play.circle")
+                       .font(.system(size: 16, weight: .medium))
+                   Text("Play")
+                       .font(.system(size: 14, weight: .medium))
+               }
+               .foregroundStyle(.white)
+               .frame(width: 82, height: 42) // 버튼 높이 42 기준
+               .padding(.vertical, 2)
+               .background(
+                   Capsule()
+                       .glassEffect()
+               )
+           }
+           .buttonStyle(.plain)
+           .glassEffect(.clear)
+           .disabled(viewModel.allClips().isEmpty)
+           .opacity(viewModel.allClips().isEmpty ? 0.0 : 1.0)
+       }
+    
+    
     
     private func scrollToCurrentMonth(proxy: ScrollViewProxy) {
         let today = Date()
