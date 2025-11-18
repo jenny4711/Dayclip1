@@ -32,13 +32,11 @@ struct CalendarMonthPage: View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(month.title)
+                    Text("\(month.title) \(month.yearTitle)")
                         .font(.system(size: 14).weight(.medium))
                         .foregroundStyle(.white)
                 }
-                Text(month.yearTitle)
-                    .font(.system(size: 14).weight(.medium))
-                    .foregroundStyle(.gray)
+              
                 Spacer()
             }
             .padding(.horizontal, horizontalPadding)

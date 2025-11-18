@@ -53,7 +53,7 @@ final class CalendarViewModel: ObservableObject {
 
     private func generateMonths() {
         let today = Date()
-        guard let startDate = calendar.date(byAdding: .month, value: -5, to: today) else { return }
+        guard let startDate = calendar.date(byAdding: .month, value: -60, to: today) else { return }
 
         var generatedMonths: [CalendarMonth] = []
 
