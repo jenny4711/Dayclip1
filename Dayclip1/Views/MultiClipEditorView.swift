@@ -60,28 +60,58 @@ struct MultiClipEditorView: View {
                     }
                 }
             }
-            .navigationTitle(formattedDate)
-            .navigationBarTitleDisplayMode(.inline)
+
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        viewModel.stopPlayback()
-                        onCancel()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .foregroundStyle(.white)
+                ToolbarItem {
+                    HStack{
+                        Button {
+                            viewModel.stopPlayback()
+                            onCancel()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.white)
+                                .frame(width:35, height: 35)
+                                .background(
+                                    Circle()
+                                    
+                                )
+                        }
+                        .buttonStyle(.plain)
+                       
+                        
+                        
+                        Spacer()
+                        
+                        Text(formattedDate)
+                        Spacer()
+                        
+                        Button {
+                            viewModel.stopPlayback()
+                            let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
+                            onComplete(draft)
+                        }label: {
+                           
+                            Text("Done")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.white)
+    //                            .padding(.horizontal, 16)
+                                .frame(width:60, height: 35)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 50)
+//                                        .fill(.white)
+                                )
+                                
+                        }
+                        .buttonStyle(.plain)
+
+                        
                     }
-                    .padding(.leading, 16)
+                  
+                 
+                   
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        viewModel.stopPlayback()
-                        let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
-                        onComplete(draft)
-                    }
-                    .disabled(viewModel.isLoading || viewModel.isBuildingPreview)
-                    .padding(.trailing, 16)
-                }
+
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
@@ -173,7 +203,8 @@ struct MultiClipEditorView: View {
         }
         .task {
             activatePlaybackAudioSession()
-            await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio, backgroundTrack: nil)
+            // 초기 로딩 시 미리보기 생성을 건너뛰어 로딩 속도 개선
+            // 사용자가 재생 버튼을 누를 때 rebuildPreviewPlayer가 호출됨
         }
     }
 
@@ -192,12 +223,15 @@ struct MultiClipEditorView: View {
                 clip: clip,
                 isSelected: viewModel.selectedClipID == clip.id,
                 onTrimStartChange: { newStart in
-                    viewModel.updateTrimStart(clipID: clip.id, start: newStart)
+                    // 드래그 중에는 미리보기 재생성 없이 상태만 업데이트
+                    viewModel.updateTrimStart(clipID: clip.id, start: newStart, rebuildPreview: false)
                 },
                 onDragEnd: {
                     if viewModel.selectedClipID == clip.id {
-                        Task {
-                            await viewModel.playSelected2SecondRange(for: clip.id)
+                        // 드래그 종료 후 선택된 2초 구간 재생 (비동기로 실행하여 반응성 개선)
+                        Task.detached(priority: .userInitiated) { [weak viewModel, clipID = clip.id] in
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1초 딜레이
+                            await viewModel?.playSelected2SecondRange(for: clipID)
                         }
                     }
                 }

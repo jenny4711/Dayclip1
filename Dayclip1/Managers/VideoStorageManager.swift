@@ -140,12 +140,13 @@ final class VideoStorageManager {
         }
     }
 
-    func prepareEditingAsset(for date: Date, sourceURL: URL) throws -> URL {
+    func prepareEditingAsset(for date: Date, sourceURL: URL) async throws -> URL {
         let directory = editingDirectory(for: date)
         if !fileManager.fileExists(atPath: directory.path) {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
+        // 이미 같은 디렉토리에 있으면 복사 불필요
         if sourceURL.deletingLastPathComponent() == directory {
             return sourceURL
         }
@@ -159,7 +160,11 @@ final class VideoStorageManager {
             try fileManager.removeItem(at: destination)
         }
 
-        try fileManager.copyItem(at: sourceURL, to: destination)
+        // 파일 복사를 백그라운드 스레드에서 실행
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.copyItem(at: sourceURL, to: destination)
+        }.value
+        
         if sourceURL.path.hasPrefix(NSTemporaryDirectory()) {
             try? fileManager.removeItem(at: sourceURL)
         }

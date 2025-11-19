@@ -233,9 +233,9 @@ final class MultiClipEditorViewModel: ObservableObject {
                         switch source {
                         case .picker(let pickerItem):
                             guard let movie = try await pickerItem.loadTransferable(type: PickedMovie.self) else { return nil }
-                            storedURL = try VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: movie.url)
+                            storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: movie.url)
                         case .file(let url):
-                            storedURL = try VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: url)
+                            storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: url)
                         }
 
                         let asset = AVAsset(url: storedURL)
@@ -308,10 +308,24 @@ final class MultiClipEditorViewModel: ObservableObject {
             }
         }
 
-        scheduleThumbnailGeneration()
+        // 모든 썸네일 생성을 백그라운드로 이동하여 초기 로딩 속도 개선
+        // 첫 번째 클립부터 우선 생성하되, await 없이 백그라운드에서 실행
+        if !built.isEmpty {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                await self?.scheduleThumbnailGeneration(for: [0])
+            }
+        }
+        
+        // 나머지 클립의 썸네일은 백그라운드에서 생성
+        if built.count > 1 {
+            let remainingIndexes = Array(1..<built.count)
+            Task.detached(priority: .utility) { [weak self] in
+                await self?.scheduleThumbnailGeneration(for: remainingIndexes)
+            }
+        }
 
-        // 미리보기는 즉시 생성 (사용자가 바로 재생할 수 있도록)
-        await rebuildPreviewPlayer()
+        // 미리보기는 사용자가 재생 버튼을 누를 때 생성 (초기 로딩 속도 개선)
+        // await rebuildPreviewPlayer()
     }
 
     private func makeTimelineFrames(duration: Double) -> [TimelineFrame] {
@@ -328,7 +342,7 @@ final class MultiClipEditorViewModel: ObservableObject {
         }
     }
 
-    private func scheduleThumbnailGeneration(for targetIndexes: [Int]? = nil) {
+    func scheduleThumbnailGeneration(for targetIndexes: [Int]? = nil) async {
         let indexes = targetIndexes ?? Array(clips.indices)
         guard !indexes.isEmpty else { return }
 
@@ -499,7 +513,7 @@ final class MultiClipEditorViewModel: ObservableObject {
         return rotatedSize(for: clip)
     }
 
-    func rotateClip(_ clip: EditorClip) {
+    func rotateClip(_ clip: EditorClip) async {
         guard let index = clips.firstIndex(where: { $0.id == clip.id }) else { return }
         clips[index].rotationQuarterTurns = normalizedQuarterTurns(clips[index].rotationQuarterTurns + 1)
 
@@ -509,14 +523,14 @@ final class MultiClipEditorViewModel: ObservableObject {
             }
         }
 
-        scheduleThumbnailGeneration(for: [index])
+        await scheduleThumbnailGeneration(for: [index])
 
         Task { [weak self] in
             await self?.rebuildPreviewPlayer()
         }
     }
 
-    func updateTrimStart(clipID: UUID, start: Double) {
+    func updateTrimStart(clipID: UUID, start: Double, rebuildPreview: Bool = false) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
         let clip = clips[index]
         let targetDuration = min(defaultTrimDuration, clip.duration)
@@ -531,8 +545,11 @@ final class MultiClipEditorViewModel: ObservableObject {
         clips[index].trimStart = clampedStart
         clips[index].trimDuration = targetDuration
 
-        Task { [weak self] in
-            await self?.rebuildPreviewPlayer()
+        // 드래그 중에는 미리보기 재생성을 건너뛰어 반응성 개선
+        if rebuildPreview {
+            Task { [weak self] in
+                await self?.rebuildPreviewPlayer()
+            }
         }
     }
 
