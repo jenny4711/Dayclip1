@@ -53,12 +53,14 @@ struct MultiClipEditorView: View {
                 let timelineMaxHeight = geo.size.height - headerHeight - safeFrameHeight - bottomControlsHeight - spaceBetweenVideoAndTimeline - spaceBelowTimeline - safeAreaBottom
 
                 ZStack {
-                    Color.black.ignoresSafeArea()
+                    Color.black
+                        .ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // PRD: 상단 헤더 영역 (고정 88pt, 위쪽 공간 없음) - 최상단에 배치
-                        headerSection(safeAreaTop: 0) // 헤더 위쪽 공간 없음
-                            .zIndex(10) // 헤더가 항상 최상단에 표시되도록
+//                        // PRD: 상단 헤더 영역 (고정 88pt, 위쪽 공간 없음) - 최상단에 배치
+//                        headerSection(safeAreaTop:0) // 헤더 위쪽 공간 없음
+//                            .zIndex(10) // 헤더가 항상 최상단에 표시되도록
+                       
                         
                         // PRD: 미리보기 영역 (동적 크기, 비율 유지) - 헤더 바로 아래
                         previewSection(availableHeight: safeFrameHeight)
@@ -103,14 +105,73 @@ struct MultiClipEditorView: View {
                     }
                 }
             }
+            .navigationTitle(formattedDate)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar{
+                ToolbarItem(placement:.topBarLeading){
+                    Button {
+                        viewModel.stopPlayback()
+                        onCancel()
+                    } label: {
+                        
+
+                        Image(systemName: "xmark")
+                                                    .font(.system(size: 14))
+                                                    .foregroundStyle(.white)
+                                                    .frame(width: 35, height: 35)
+                        .buttonStyle(.plain)
+                        
+                        .glassEffect(
+                            .identity,
+                            in:.circle
+                                
+                        )
+                        
+
+                            
+                          
+
+                    }
+
+                
+                    
+  
+                }//:xBTN toolbarITEM
+                
+                ToolbarItem(placement:.topBarTrailing){
+                    Button {
+                        viewModel.stopPlayback()
+                        let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
+                        onComplete(draft)
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 65, height: 40)
+                            
+                            .glassEffect(
+                                .identity,
+                                in:.capsule
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                
+
+                
+                
+            }
         }
+        
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
             viewModel.stopPlayback()
         }
         .onDisappear {
             viewModel.stopPlayback()
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Color.black
+            .ignoresSafeArea()
+        )
     }
     
     // PRD: 고정 영역 높이 계산 (타임라인 높이를 고려하여 미리보기 높이 계산)
@@ -172,8 +233,8 @@ struct MultiClipEditorView: View {
                                 .fill(Color.gray.opacity(0.3))
                         )
                 }
-                .buttonStyle(.plain)
-                .padding(.leading, 16)
+                .buttonStyle(.glass)
+//                .padding(.leading, 16)
                 
                 Spacer()
                 
@@ -185,14 +246,15 @@ struct MultiClipEditorView: View {
                     Text("Done")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 60, height: 35)
+                        .frame(width: 65, height: 40)
                         .background(
                             RoundedRectangle(cornerRadius: 50)
                                 .fill(Color.gray.opacity(0.3))
                         )
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, 16)
+                .glassEffect()
+//                .padding(.trailing, 16)
             }
             .padding(.top, 0) // 위쪽 패딩 없음
             
@@ -204,7 +266,9 @@ struct MultiClipEditorView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 88) // 헤더 높이만 (위쪽 공간 없음)
-        .background(Color.black)
+        .padding(.horizontal,16)
+        .background(Color.red)
+        
     }
     
     // PRD: 미리보기 영역 (비율 유지, letterboxing)
