@@ -569,5 +569,29 @@ final class MultiClipEditorViewModel: ObservableObject {
         let end = CMTimeAdd(range.start, range.duration).seconds
         return "\(formatDuration(seconds: start)) - \(formatDuration(seconds: end))"
     }
+    
+    // PRD: 영상 비율 정보 제공
+    func videoAspectRatio(for clipID: UUID?) -> CGFloat? {
+        guard let clipID = clipID,
+              let clip = clips.first(where: { $0.id == clipID }),
+              clip.renderSize.height > 0 else {
+            return nil
+        }
+        return clip.renderSize.width / clip.renderSize.height
+    }
+    
+    // PRD: 현재 선택된 클립의 비율 정보
+    var currentVideoAspectRatio: CGFloat? {
+        videoAspectRatio(for: selectedClipID)
+    }
+    
+    // PRD: 현재 선택된 클립의 renderSize
+    var currentVideoSize: CGSize? {
+        guard let selectedClipID = selectedClipID,
+              let clip = clips.first(where: { $0.id == selectedClipID }) else {
+            return nil
+        }
+        return clip.renderSize
+    }
 }
 

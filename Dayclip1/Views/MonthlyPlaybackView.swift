@@ -95,56 +95,37 @@ struct MonthlyPlaybackView: View {
     }
 
     private var topBar: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Button {
-                    viewModel.stop()
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 32, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 4)
-                }
-
-                Spacer()
-
-                VStack(alignment: .center, spacing: 4) {
-                    Text(session.monthTitle)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text(viewModel.progressLabel)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-
-                Spacer()
-
-                Button {
-                    shareMonthlyCompilation()
-                } label: {
-                    if isExportingShare {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                    } else {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 28, weight: .semibold))
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .padding(.trailing, 4)
-                .disabled(isExportingShare || session.clips.isEmpty)
+        HStack {
+            Button {
+                viewModel.stop()
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 32, height: 32)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 24)
-            .padding(.bottom, 12)
+
+            Spacer()
+
+            Text(session.monthTitle) // "November 11, 2025"
+                .font(.system(size: 15, weight: .semibold))
+
+            Spacer()
+
+            Button("Done") {
+                viewModel.stop()
+                onClose()
+            }
+            .font(.system(size: 17, weight: .semibold))
         }
-        .frame(maxWidth: .infinity)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)      // ✅ 딱 safe area 바로 밑 정도
+        .padding(.bottom, 8)
         .background(
-            LinearGradient(colors: [Color.black.opacity(0.85), Color.black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea(edges: .top)
+            Color.black
+                .opacity(0.9)
+                .ignoresSafeArea(edges: .top)  // 배경만 safe area 침범
         )
     }
 
