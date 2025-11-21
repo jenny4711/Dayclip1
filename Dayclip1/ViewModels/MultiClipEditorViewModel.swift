@@ -4,6 +4,23 @@
 //
 //  Created by Ji y LEE on 11/7/25.
 //
+//  SCRUBBING IMPLEMENTATION (YouTube-style)
+//  ========================================
+//  This file implements YouTube-style video scrubbing for the edit screen.
+//
+//  Key Changes:
+//  - Added scrub(to:for:) method: Called during drag, pauses player and seeks to progress position
+//  - Added finishScrubbing(at:for:) method: Called on drag end, updates trimStart and rebuilds preview
+//  - Progress-based approach: Uses 0.0-1.0 progress instead of raw time values
+//  - convertClipTimeToCompositionTime(): Helper to convert clip time to composition time for multi-clip support
+//
+//  How it works:
+//  1. User drags yellow box → View calculates progress (0.0-1.0) from x-position
+//  2. View calls scrub(to:progress, for:clipID) → Player pauses and seeks to composition time
+//  3. On drag end → View calls finishScrubbing(at:progress, for:clipID) → Updates trimStart and rebuilds preview
+//
+//  The yellow box drag now feels like YouTube's seek bar: immediate preview updates as you drag.
+//
 
 import Foundation
 import AVFoundation
@@ -52,9 +69,12 @@ final class MultiClipEditorViewModel: ObservableObject {
     private var currentMuteOriginal = false
     private var currentBackgroundTrack: BackgroundTrackSelection?
     private var rebuildTask: Task<AVPlayerItem?, Never>?
+    private var seekTask: Task<Void, Never>?
     private var thumbnailTasks: [Task<Void, Never>] = []
     private let maxTimelineFrames = 80
     private let defaultTrimDuration: Double = 2.0
+    private var lastSeekTime: Double?
+    private let seekThrottleInterval: TimeInterval = 0.03 // 0.03초마다 seek (매우 빠른 반응)
 
     init(draft: EditorDraft) {
         self.draft = draft
@@ -111,7 +131,35 @@ final class MultiClipEditorViewModel: ObservableObject {
             player.replaceCurrentItem(with: item)
             player.isMuted = false
             activatePlaybackAudioSession()
-            if let item, isPlaying {
+            
+            // rebuildPreviewPlayer 완료 후 현재 선택된 클립의 trimStart 위치로 자동 seek
+            if let item, let selectedClipID = selectedClipID,
+               let clip = clips.first(where: { $0.id == selectedClipID }) {
+                // 현재 선택된 클립의 trimStart 위치로 seek
+                let sortedClips = clips.sorted(by: { $0.order < $1.order })
+                var compositionTime: CMTime = .zero
+                
+                for previousClip in sortedClips {
+                    if previousClip.id == selectedClipID {
+                        // 선택된 클립의 trimStart 위치로 seek
+                        // composition 내에서의 시간 = 이전 클립들의 duration 합
+                        // (trimStart부터 시작하는 구간이 삽입되므로, trimStart 위치는 클립의 시작 = 이전 클립들의 duration 합)
+                        // relativeTime은 0 (클립의 시작 위치)
+                        break
+                    } else {
+                        let safeStart = min(max(previousClip.trimStart, 0), previousClip.duration)
+                        let remaining = max(previousClip.duration - safeStart, 0)
+                        let trimmedDuration = min(max(previousClip.trimDuration, 0.1), remaining)
+                        compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
+                    }
+                }
+                
+                item.seek(to: compositionTime, toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600), completionHandler: { [weak self] _ in
+                    if let self = self, self.isPlaying {
+                        self.player.play()
+                    }
+                })
+            } else if let item, isPlaying {
                 item.seek(to: .zero, completionHandler: { [weak self] _ in
                     self?.player.play()
                 })
@@ -150,6 +198,247 @@ final class MultiClipEditorViewModel: ObservableObject {
     func stopPlayback() {
         player.pause()
         isPlaying = false
+        seekTask?.cancel()
+        seekTask = nil
+    }
+    
+    // MARK: - Scrubbing Methods
+    
+    /// 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
+    /// - Parameters:
+    ///   - progress: 0.0-1.0 범위의 진행률 (타임라인에서의 위치)
+    ///   - clipID: 선택된 클립의 ID
+    func scrub(to progress: Double, for clipID: UUID?) {
+        // 미리보기 재생성 중이면 seek 건너뛰기
+        guard !isBuildingPreview else { return }
+        
+        // clipID가 없거나 클립을 찾을 수 없으면 종료
+        guard let clipID = clipID,
+              let clip = clips.first(where: { $0.id == clipID }) else {
+            return
+        }
+        
+        // player.currentItem이 없으면 종료 (아직 미리보기가 생성되지 않음)
+        guard let currentItem = player.currentItem else {
+            return
+        }
+        
+        // 현재 재생 중이면 일시정지
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        }
+        
+        // throttle: 너무 자주 호출되지 않도록 제한 (약 30ms마다)
+        let now = Date().timeIntervalSince1970
+        if let lastSeek = lastSeekTime,
+           now - lastSeek < seekThrottleInterval {
+            return
+        }
+        lastSeekTime = now
+        
+        // 이전 seek 작업 취소
+        seekTask?.cancel()
+        
+        // progress를 클램핑 (0.0-1.0)
+        let clampedProgress = max(0.0, min(1.0, progress))
+        
+        // progress를 원본 클립의 시간(초)으로 변환
+        let duration = max(clip.duration, 0.1)
+        let maxStart = max(duration - clip.trimDuration, 0)
+        let startSeconds = clampedProgress * maxStart
+        
+        // composition 내의 시간으로 변환
+        let compositionTime = convertClipTimeToCompositionTime(
+            clipTime: startSeconds,
+            for: clipID
+        )
+        
+        guard let compositionTime = compositionTime else { return }
+        
+        // seek 실행 (작은 tolerance로 빠른 반응)
+        seekTask = Task { @MainActor [weak self] in
+            guard let self = self, !Task.isCancelled else { return }
+            
+            await currentItem.seek(
+                to: compositionTime,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            
+            if !Task.isCancelled {
+                self.seekTask = nil
+            }
+        }
+    }
+    
+    /// 드래그 종료 시 최종 위치로 seek하고 상태 업데이트
+    /// - Parameters:
+    ///   - progress: 0.0-1.0 범위의 최종 진행률
+    ///   - clipID: 선택된 클립의 ID
+    func finishScrubbing(at progress: Double, for clipID: UUID?) {
+        guard let clipID = clipID,
+              let clip = clips.first(where: { $0.id == clipID }) else {
+            return
+        }
+        
+        // progress를 클램핑
+        let clampedProgress = max(0.0, min(1.0, progress))
+        
+        // progress를 원본 클립의 시간(초)으로 변환
+        let duration = max(clip.duration, 0.1)
+        let maxStart = max(duration - clip.trimDuration, 0)
+        let startSeconds = clampedProgress * maxStart
+        
+        // trimStart 업데이트
+        updateTrimStart(clipID: clipID, start: startSeconds, rebuildPreview: false)
+        
+        // 최종 위치로 seek (rebuildPreviewPlayer가 완료된 후)
+        if let currentItem = player.currentItem {
+            let compositionTime = convertClipTimeToCompositionTime(
+                clipTime: startSeconds,
+                for: clipID
+            )
+            
+            if let compositionTime = compositionTime {
+                seekTask?.cancel()
+                seekTask = Task { @MainActor [weak self] in
+                    guard let self = self, !Task.isCancelled else { return }
+                    await currentItem.seek(
+                        to: compositionTime,
+                        toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
+                        toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600)
+                    )
+                    if !Task.isCancelled {
+                        self.seekTask = nil
+                    }
+                }
+            }
+        }
+        
+        // 드래그 종료 후 미리보기 재생성 (debounce)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2초 딜레이
+            await self?.rebuildPreviewPlayer()
+        }
+    }
+    
+    /// 클립의 원본 시간을 composition 내의 시간으로 변환
+    /// - Parameters:
+    ///   - clipTime: 원본 클립의 시간(초)
+    ///   - clipID: 클립의 ID
+    /// - Returns: composition 내의 CMTime, 변환 실패 시 nil
+    private func convertClipTimeToCompositionTime(clipTime: Double, for clipID: UUID) -> CMTime? {
+        guard let clip = clips.first(where: { $0.id == clipID }) else {
+            return nil
+        }
+        
+        let clampedTime = min(max(clipTime, 0), clip.duration)
+        let sortedClips = clips.sorted(by: { $0.order < $1.order })
+        var compositionTime: CMTime = .zero
+        
+        // 선택된 클립 이전의 모든 클립의 trimDuration을 합산
+        for previousClip in sortedClips {
+            if previousClip.id == clipID {
+                // 선택된 클립 내에서의 상대 시간 계산
+                // buildPreviewItem: trimStart부터 시작하는 구간을 cursor 위치에 삽입
+                // 따라서 composition 내에서의 시간 = 이전 클립들의 duration 합 + (clampedTime - trimStart)
+                let safeStart = min(max(previousClip.trimStart, 0), previousClip.duration)
+                let relativeTime = max(0, clampedTime - safeStart)
+                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: relativeTime, preferredTimescale: 600))
+                break
+            } else {
+                // 이전 클립의 trimDuration 추가
+                let safeStart = min(max(previousClip.trimStart, 0), previousClip.duration)
+                let remaining = max(previousClip.duration - safeStart, 0)
+                let trimmedDuration = min(max(previousClip.trimDuration, 0.1), remaining)
+                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
+            }
+        }
+        
+        return compositionTime
+    }
+    
+    // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (레거시 - 호환성을 위해 유지)
+    func seekPreviewToTime(time: Double, for clipID: UUID) {
+        // 미리보기 재생성 중이면 seek 건너뛰기
+        guard !isBuildingPreview else { return }
+        
+        // 현재 재생 중이면 일시정지
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        }
+        
+        // throttle: 너무 자주 호출되지 않도록 제한 (드래그 중에는 더 자주 업데이트)
+        let now = Date().timeIntervalSince1970
+        if let lastSeek = lastSeekTime,
+           now - lastSeek < seekThrottleInterval {
+            return
+        }
+        lastSeekTime = now
+        
+        // 이전 seek 작업 취소
+        seekTask?.cancel()
+        
+        guard let clip = clips.first(where: { $0.id == clipID }) else {
+            return
+        }
+        
+        // player.currentItem이 없으면 rebuildPreviewPlayer가 완료될 때까지 대기
+        guard let currentItem = player.currentItem else {
+            // currentItem이 없으면 나중에 다시 시도하기 위해 Task로 예약
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1초 대기
+                self?.seekPreviewToTime(time: time, for: clipID)
+            }
+            return
+        }
+        
+        // time은 사용자가 드래그한 새로운 시작 시간 (원본 영상의 시간)
+        // buildPreviewItem에서는 각 클립의 trimStart부터 시작하는 구간을 composition에 삽입하므로,
+        // composition 내에서의 시간 = 이전 클립들의 duration 합 + (time - 현재 클립의 trimStart)
+        
+        let clampedTime = min(max(time, 0), clip.duration)
+        
+        // 여러 클립이 있을 경우 order를 고려하여 composition 내의 시간 계산
+        // buildPreviewItem에서 사용하는 로직과 정확히 일치하도록 구현
+        let sortedClips = clips.sorted(by: { $0.order < $1.order })
+        var compositionTime: CMTime = .zero
+        
+        // 선택된 클립 이전의 모든 클립의 trimDuration을 합산
+        for previousClip in sortedClips {
+            if previousClip.id == clipID {
+                // 선택된 클립 내에서의 상대 시간 계산
+                // buildPreviewItem: trimStart부터 시작하는 구간을 cursor 위치에 삽입
+                // 따라서 composition 내에서의 시간 = 이전 클립들의 duration 합 + (clampedTime - trimStart)
+                // 주의: composition은 이전 trimStart 값으로 만들어졌으므로, 새로운 time 위치로 seek하려면
+                // 이전 trimStart를 기준으로 상대 시간을 계산해야 함
+                let currentTrimStart = previousClip.trimStart // 현재 composition에 사용된 trimStart
+                let safeStart = min(max(currentTrimStart, 0), previousClip.duration)
+                let relativeTime = max(0, clampedTime - safeStart) // trimStart 기준 상대 시간
+                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: relativeTime, preferredTimescale: 600))
+                break
+            } else {
+                // 이전 클립의 trimDuration 추가 (buildPreviewItem과 정확히 동일한 로직)
+                let safeStart = min(max(previousClip.trimStart, 0), previousClip.duration)
+                let remaining = max(previousClip.duration - safeStart, 0)
+                let trimmedDuration = min(max(previousClip.trimDuration, 0.1), remaining)
+                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
+            }
+        }
+        
+        seekTask = Task { @MainActor [weak self] in
+            guard let self = self, !Task.isCancelled else { return }
+            
+            // seek 실행 (tolerance를 설정하여 더 빠른 seek 가능)
+            await currentItem.seek(to: compositionTime, toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600))
+            
+            // seek 완료 후 Task 정리
+            if !Task.isCancelled {
+                self.seekTask = nil
+            }
+        }
     }
     
     func playSelected2SecondRange(for clipID: UUID) async {
@@ -317,6 +606,7 @@ final class MultiClipEditorViewModel: ObservableObject {
             storedURLs.append(result.url)
         }
 
+        // clips 배열이 채워지면 즉시 isLoading을 false로 설정하여 UI 반응성 개선
         clips = built
         isLoading = false
         

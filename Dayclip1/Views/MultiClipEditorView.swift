@@ -4,6 +4,23 @@
 //
 //  Created by Ji y LEE on 11/7/25.
 //
+//  SCRUBBING IMPLEMENTATION (YouTube-style)
+//  ========================================
+//  This file implements YouTube-style video scrubbing for the timeline view.
+//
+//  Key Changes:
+//  - TimelineTrimView now uses progress-based scrubbing (0.0-1.0)
+//  - onScrub callback: Calculates progress from drag offset and calls ViewModel.scrub()
+//  - onFinishScrubbing callback: Calculates final progress and calls ViewModel.finishScrubbing()
+//  - Progress calculation: progress = max(0.0, min(1.0, offset / travel))
+//
+//  How it works:
+//  1. User drags yellow box → Calculate progress from x-position
+//  2. Call onScrub(progress) → ViewModel pauses player and seeks to that position
+//  3. On drag end → Call onFinishScrubbing(progress) → ViewModel updates trimStart and rebuilds preview
+//
+//  The yellow box drag now feels like YouTube's seek bar: immediate preview updates as you drag.
+//
 
 import SwiftUI
 import AVFoundation
@@ -77,17 +94,13 @@ struct MultiClipEditorView: View {
                         
                         // 타임라인 영역 - 음소거/휴지통 바로 아래
                         Group {
-                            if viewModel.isLoading {
-                                ProgressView("영상을 불러오는 중...")
-                                    .foregroundStyle(.white)
-                                    .frame(height: 86)
-                            } else if let error = viewModel.errorMessage, viewModel.clips.isEmpty {
+                            if let error = viewModel.errorMessage, viewModel.clips.isEmpty {
                                 Text(error)
                                     .multilineTextAlignment(.center)
                                     .foregroundStyle(.white)
                                     .padding()
                                     .frame(height: 86)
-                            } else {
+                            } else if !viewModel.clips.isEmpty {
                                 ScrollView {
                                     VStack(alignment: .leading, spacing: 24) {
                                         ForEach(viewModel.clips) { clip in
@@ -98,6 +111,10 @@ struct MultiClipEditorView: View {
                                     .padding(.bottom, 60) // 타임라인과 페이지 밑 부분 사이 공간 60pt
                                 }
                                 .frame(height: 86) // 타임라인 영역을 고정 높이로 제한 (파란색 공간 최소화)
+                            } else {
+                                // 로딩 중에는 빈 상태로 표시 (스피너 제거)
+                                Color.clear
+                                    .frame(height: 86)
                             }
                         }
                    
@@ -107,6 +124,30 @@ struct MultiClipEditorView: View {
             }
             .navigationTitle(formattedDate)
             .navigationBarTitleDisplayMode(.inline)
+            // 화면 중앙에 전체 로딩 오버레이 하나만 표시
+            .overlay {
+                if viewModel.isLoading {
+                    ZStack {
+                        Color.black.opacity(0.7)
+                            .ignoresSafeArea()
+                        ProgressView("영상을 불러오는 중...")
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                            .padding(20)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                } else if viewModel.isBuildingPreview {
+                    ZStack {
+                        Color.black.opacity(0.5)
+                            .ignoresSafeArea()
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                            .padding(20)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                }
+            }
             .toolbar{
                 ToolbarItem(placement:.topBarLeading){
                     Button {
@@ -358,20 +399,12 @@ struct MultiClipEditorView: View {
                 }
                 .frame(height: geo.size.height) // 정확히 GeometryReader의 높이만 사용
                 
-                if viewModel.isLoading {
-                    ProgressView()
-                        .tint(.white)
-                } else if !viewModel.hasSelection {
+                if !viewModel.hasSelection && !viewModel.isLoading {
                     Text("선택된 구간이 없습니다.")
                         .font(.footnote)
                         .foregroundStyle(.white)
                         .padding(8)
                         .background(.thinMaterial, in: Capsule())
-                }
-                
-                if viewModel.isBuildingPreview {
-                    ProgressView()
-                        .tint(.white)
                 }
                 
                 // 재생 버튼 오버레이 (일시정지 상태일 때만 표시)
@@ -452,18 +485,16 @@ struct MultiClipEditorView: View {
                 clip: clip,
                 isSelected: viewModel.selectedClipID == clip.id,
                 onTrimStartChange: { newStart in
-                    // 드래그 중에는 미리보기 재생성 없이 상태만 업데이트
+                    // 호환성을 위해 유지 (finishScrubbing에서도 처리됨)
                     viewModel.updateTrimStart(clipID: clip.id, start: newStart, rebuildPreview: false)
                 },
-                onDragEnd: {
-                    // 드래그 종료 후 미리보기 재생성 (debounce 적용)
-                    if viewModel.selectedClipID == clip.id {
-                        Task.detached(priority: .userInitiated) { [weak viewModel, clipID = clip.id] in
-                            // 짧은 딜레이로 debounce (연속 드래그 시 불필요한 재생성 방지)
-                            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2초 딜레이
-                            await viewModel?.rebuildPreviewPlayer()
-                        }
-                    }
+                onScrub: { progress in
+                    // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
+                    viewModel.scrub(to: progress, for: clip.id)
+                },
+                onFinishScrubbing: { progress in
+                    // 드래그 종료 시 최종 위치로 seek하고 상태 업데이트
+                    viewModel.finishScrubbing(at: progress, for: clip.id)
                 }
             )
             .frame(height: 86)
@@ -488,7 +519,8 @@ struct TimelineTrimView: View {
     let clip: MultiClipEditorViewModel.EditorClip
     let isSelected: Bool
     let onTrimStartChange: (Double) -> Void
-    let onDragEnd: () -> Void
+    let onScrub: (Double) -> Void  // progress (0.0-1.0) 기반 scrubbing
+    let onFinishScrubbing: (Double) -> Void  // progress (0.0-1.0) 기반 finish
 
     @State private var dragOrigin: CGFloat?
     @State private var previewImage: UIImage?
@@ -639,33 +671,36 @@ struct TimelineTrimView: View {
                                 // 드래그 중에는 로컬 상태만 업데이트 (뷰 재렌더링 최소화)
                                 localDragOffset = newOffset
                                 
-                                // 프리뷰는 덜 자주 업데이트 (성능 최적화)
-                                let newRatio = travel > 0 ? Double(newOffset / travel) : 0
-                                let newStart = newRatio * maxStart
+                                // progress 계산 (0.0-1.0)
+                                let progress = travel > 0 ? max(0.0, min(1.0, Double(newOffset / travel))) : 0.0
+                                let newStart = progress * maxStart
                                 
-                                // 프리뷰는 드래그가 일정 거리 이상 이동했을 때만 업데이트
-                                if abs(previewOffset - newOffset) > 10 {
+                                // 프리뷰는 조금만 이동해도 즉시 업데이트 (1pt 이상)
+                                if abs(previewOffset - newOffset) > 1 {
                                     presentPreview(newStart, newOffset)
+                                    // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
+                                    onScrub(progress)
                                 }
                                 
                                 // 실제 상태 업데이트는 하지 않음 (드래그 종료 시에만)
                             }
                             .onEnded { _ in
-                                // 드래그 종료 시 실제 상태 업데이트
+                                // 드래그 종료 시 최종 progress 계산 및 finishScrubbing 호출
                                 if let finalOffset = localDragOffset {
-                                    let finalRatio = travel > 0 ? Double(finalOffset / travel) : 0
-                                    let finalStart = finalRatio * maxStart
+                                    let finalProgress = travel > 0 ? max(0.0, min(1.0, Double(finalOffset / travel))) : 0.0
+                                    let finalStart = finalProgress * maxStart
+                                    
+                                    // finishScrubbing 호출 (내부에서 trimStart 업데이트 및 rebuildPreviewPlayer 처리)
+                                    onFinishScrubbing(finalProgress)
+                                    
+                                    // 호환성을 위해 onTrimStartChange도 호출 (내부에서 중복 처리 방지됨)
                                     onTrimStartChange(finalStart)
                                 }
                                 
-                                // 상태 초기화는 onDragEnd 콜백 호출 후에 수행
-                                // (상태 업데이트가 완료된 후 초기화하여 다음 드래그 준비)
+                                // 상태 초기화
                                 dragOrigin = nil
                                 localDragOffset = nil
                                 showPreview = false
-                                
-                                // onDragEnd 콜백 호출 (미리보기 재생성 등)
-                                onDragEnd()
                             }
                     )
                 }
@@ -723,23 +758,29 @@ struct TimelineTrimView: View {
                             // 드래그 중에는 로컬 상태만 업데이트
                             localDragOffset = rawOffset
                             
-                            let newRatio = travel > 0 ? Double(rawOffset / travel) : 0
-                            let newStart = newRatio * maxStart
+                            let progress = travel > 0 ? max(0.0, min(1.0, Double(rawOffset / travel))) : 0.0
+                            let newStart = progress * maxStart
                             
-                            // 프리뷰는 덜 자주 업데이트
-                            if abs(previewOffset - rawOffset) > 10 {
+                            // 프리뷰는 조금만 이동해도 즉시 업데이트 (1pt 이상)
+                            if abs(previewOffset - rawOffset) > 1 {
                                 presentPreview(newStart, rawOffset)
+                                // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
+                                onScrub(progress)
                             }
                         }
                     }
                     .onEnded { _ in
-                        // 드래그 종료 시 실제 상태 업데이트
+                        // 드래그 종료 시 최종 progress 계산 및 finishScrubbing 호출
                         if let finalOffset = localDragOffset {
-                            let finalRatio = travel > 0 ? Double(finalOffset / travel) : 0
-                            let finalStart = finalRatio * maxStart
+                            let finalProgress = travel > 0 ? max(0.0, min(1.0, Double(finalOffset / travel))) : 0.0
+                            let finalStart = finalProgress * maxStart
+                            
+                            // finishScrubbing 호출 (내부에서 trimStart 업데이트 및 rebuildPreviewPlayer 처리)
+                            onFinishScrubbing(finalProgress)
+                            
+                            // 호환성을 위해 onTrimStartChange도 호출
                             onTrimStartChange(finalStart)
                         }
-                        // 로컬 상태는 onDragEnd 콜백에서 초기화되도록 유지
                         showPreview = false
                     }
             )
