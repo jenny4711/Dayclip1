@@ -101,7 +101,7 @@ struct MultiClipEditorView: View {
                                     .padding()
                                     .frame(height: 86)
                             } else if !viewModel.clips.isEmpty {
-                                ScrollView {
+                                ScrollView(.vertical, showsIndicators: false) {
                                     VStack(alignment: .leading, spacing: 24) {
                                         ForEach(viewModel.clips) { clip in
                                             clipTimeline(clip)
@@ -110,6 +110,8 @@ struct MultiClipEditorView: View {
                                     .padding(.horizontal)
                                     .padding(.bottom, 60) // 타임라인과 페이지 밑 부분 사이 공간 60pt
                                 }
+                                .scrollBounceBehavior(.basedOnSize)
+                                .scrollDismissesKeyboard(.never)
                                 .frame(height: 86) // 타임라인 영역을 고정 높이로 제한 (파란색 공간 최소화)
                             } else {
                                 // 로딩 중에는 빈 상태로 표시 (스피너 제거)
