@@ -615,6 +615,11 @@ final class MultiClipEditorViewModel: ObservableObject {
             selectedClipID = firstClip.id
         }
 
+        // 비디오 로드 완료 후 즉시 미리보기 생성하여 프레임 표시 (자동 재생 없음)
+        if !built.isEmpty {
+            await rebuildPreviewPlayer()
+        }
+
         // 비동기 작업들을 백그라운드에서 처리
         let draftDate = draft.date
         Task.detached(priority: .utility) { [storedURLs, draftDate] in
@@ -638,9 +643,6 @@ final class MultiClipEditorViewModel: ObservableObject {
                 await self?.scheduleThumbnailGeneration(for: remainingIndexes)
             }
         }
-
-        // 미리보기는 사용자가 재생 버튼을 누를 때 생성 (초기 로딩 속도 개선)
-        // await rebuildPreviewPlayer()
     }
 
     private func makeTimelineFrames(duration: Double) -> [TimelineFrame] {

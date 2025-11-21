@@ -130,7 +130,7 @@ struct MultiClipEditorView: View {
                     ZStack {
                         Color.black.opacity(0.7)
                             .ignoresSafeArea()
-                        ProgressView("영상을 불러오는 중...")
+                        ProgressView("Downloading…")
                             .progressViewStyle(.circular)
                             .tint(.white)
                             .padding(20)
@@ -180,22 +180,25 @@ struct MultiClipEditorView: View {
                 }//:xBTN toolbarITEM
                 
                 ToolbarItem(placement:.topBarTrailing){
-                    Button {
-                        viewModel.stopPlayback()
-                        let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
-                        onComplete(draft)
-                    } label: {
-                        Text("Done")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
-                            .frame(width: 65, height: 40)
-                            
-                            .glassEffect(
-                                .identity,
-                                in:.capsule
-                            )
+                    // 로딩 중이 아닐 때만 Done 버튼 표시
+                    if !viewModel.isLoading && !viewModel.isBuildingPreview {
+                        Button {
+                            viewModel.stopPlayback()
+                            let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
+                            onComplete(draft)
+                        } label: {
+                            Text("Done")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.white)
+                                .frame(width: 65, height: 40)
+                                
+                                .glassEffect(
+                                    .identity,
+                                    in:.capsule
+                                )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
                 
 
@@ -434,37 +437,43 @@ struct MultiClipEditorView: View {
     // PRD: 하단 기능 아이콘 영역
     private var bottomControlsSection: some View {
         HStack {
-            // 음소거 토글 버튼 (왼쪽)
-            Button {
-                muteAudio.toggle()
-                Task { await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio) }
-            } label: {
-                Image(muteAudio ? "soundOFF" : "soundON")
-                    .renderingMode(.original)
-                    .resizable()
-                  
-                    .interpolation(.none)
-                    .antialiased(false)
-                    .scaledToFit()
-                    .frame(width: 24, height: 24)
-                    .foregroundStyle(.white)
+            // 로딩 중이 아닐 때만 아이콘 표시 (비디오 로딩 또는 타임라인 로딩 중 모두 숨김)
+            if !viewModel.isLoading && !viewModel.isBuildingPreview {
+                // 음소거 토글 버튼 (왼쪽)
+                Button {
+                    muteAudio.toggle()
+                    Task { await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio) }
+                } label: {
+                    Image(muteAudio ? "soundOFF" : "soundON")
+                        .renderingMode(.original)
+                        .resizable()
+                      
+                        .interpolation(.none)
+                        .antialiased(false)
+                        .scaledToFit()
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 16)
+                
+                Spacer()
+                
+                // 휴지통 버튼 (오른쪽)
+                Button {
+                    viewModel.stopPlayback()
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.white)
+                        .font(.system(size: 20))
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+            } else {
+                // 로딩 중일 때는 빈 공간만 유지
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .padding(.leading, 16)
-            
-            Spacer()
-            
-            // 휴지통 버튼 (오른쪽)
-            Button {
-                viewModel.stopPlayback()
-                onDelete()
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.white)
-                    .font(.system(size: 20))
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 16)
         }
         .frame(maxWidth: .infinity)
         .background(Color.black)
@@ -614,12 +623,8 @@ struct TimelineTrimView: View {
                                     .resizable()
                                     .scaledToFill()
                             } else {
+                                // 썸네일이 없을 때는 빈 공간만 표시 (스피너 제거)
                                 Color.secondary.opacity(0.18)
-                                    .overlay {
-                                        ProgressView()
-                                            .tint(.secondary)
-                                            .scaleEffect(0.6)
-                                    }
                             }
                         }
                         .frame(width: max(CGFloat(frame.length / duration) * totalWidth, 4), height: 80)
