@@ -364,6 +364,10 @@ struct ContentView: View {
                 )
 
                 try await ClipStore.shared.upsert(clip.metadata)
+                
+                // 편집 정보 저장 (trim 정보 포함)
+                let sourceURLs = VideoStorageManager.shared.loadEditingSources(for: day.date)
+                VideoStorageManager.shared.saveEditingComposition(composition, sourceURLs: sourceURLs, for: day.date)
 
                 await MainActor.run {
                     viewModel.setClip(clip)

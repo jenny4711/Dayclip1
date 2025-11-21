@@ -207,6 +207,31 @@ final class VideoStorageManager {
                 return fileManager.fileExists(atPath: url.path) ? url : nil
             }
     }
+    
+    // MARK: - Editing Composition Persistence
+    
+    func saveEditingComposition(_ draft: EditorCompositionDraft, sourceURLs: [URL], for date: Date) {
+        let directory = editingDirectory(for: date)
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        
+        let persistable = PersistableEditingComposition(from: draft, sourceURLs: sourceURLs)
+        let metaURL = directory.appendingPathComponent("composition.json")
+        if let data = try? JSONEncoder().encode(persistable) {
+            try? data.write(to: metaURL, options: Data.WritingOptions.atomic)
+        }
+    }
+    
+    func loadEditingComposition(for date: Date) -> PersistableEditingComposition? {
+        let directory = editingDirectory(for: date)
+        let metaURL = directory.appendingPathComponent("composition.json")
+        guard let data = try? Data(contentsOf: metaURL),
+              let composition = try? JSONDecoder().decode(PersistableEditingComposition.self, from: data) else {
+            return nil
+        }
+        return composition
+    }
 
     func loadImportedBackgroundTracks() -> [BackgroundTrackOption] {
         guard let urls = try? fileManager.contentsOfDirectory(at: backgroundTracksDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {

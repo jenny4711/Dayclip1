@@ -46,3 +46,41 @@ struct EditorCompositionDraft: Identifiable {
     let renderSize: CGSize
 }
 
+// MARK: - Persistable Editing Composition (for saving/loading)
+
+struct PersistableEditingComposition: Codable {
+    struct PersistableClipSelection: Codable {
+        let filename: String
+        let order: Int
+        let trimStart: Double
+        let trimDuration: Double
+        let rotationQuarterTurns: Int
+    }
+    
+    let clipSelections: [PersistableClipSelection]
+    let muteOriginalAudio: Bool
+    let renderSizeWidth: Double
+    let renderSizeHeight: Double
+    
+    init(from draft: EditorCompositionDraft, sourceURLs: [URL]) {
+        // URL을 filename으로 매핑
+        let urlToFilename: [URL: String] = Dictionary(uniqueKeysWithValues: sourceURLs.map { ($0, $0.lastPathComponent) })
+        
+        self.clipSelections = draft.clipSelections
+            .sorted(by: { $0.order < $1.order })
+            .compactMap { selection in
+                guard let filename = urlToFilename[selection.url] else { return nil }
+                return PersistableClipSelection(
+                    filename: filename,
+                    order: selection.order,
+                    trimStart: selection.timeRange.start.seconds,
+                    trimDuration: selection.timeRange.duration.seconds,
+                    rotationQuarterTurns: selection.rotationQuarterTurns
+                )
+            }
+        self.muteOriginalAudio = draft.muteOriginalAudio
+        self.renderSizeWidth = Double(draft.renderSize.width)
+        self.renderSizeHeight = Double(draft.renderSize.height)
+    }
+}
+

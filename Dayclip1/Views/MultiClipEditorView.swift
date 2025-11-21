@@ -409,10 +409,12 @@ struct MultiClipEditorView: View {
                 Image(muteAudio ? "soundOFF" : "soundON")
                     .renderingMode(.original)
                     .resizable()
+                  
                     .interpolation(.none)
                     .antialiased(false)
                     .scaledToFit()
                     .frame(width: 24, height: 24)
+                    .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
             .padding(.leading, 16)
@@ -454,11 +456,12 @@ struct MultiClipEditorView: View {
                     viewModel.updateTrimStart(clipID: clip.id, start: newStart, rebuildPreview: false)
                 },
                 onDragEnd: {
+                    // 드래그 종료 후 미리보기 재생성 (debounce 적용)
                     if viewModel.selectedClipID == clip.id {
-                        // 드래그 종료 후 선택된 2초 구간 재생 (비동기로 실행하여 반응성 개선)
                         Task.detached(priority: .userInitiated) { [weak viewModel, clipID = clip.id] in
-                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1초 딜레이
-                            await viewModel?.playSelected2SecondRange(for: clipID)
+                            // 짧은 딜레이로 debounce (연속 드래그 시 불필요한 재생성 방지)
+                            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2초 딜레이
+                            await viewModel?.rebuildPreviewPlayer()
                         }
                     }
                 }
@@ -492,6 +495,10 @@ struct TimelineTrimView: View {
     @State private var previewTime: Double = 0
     @State private var previewOffset: CGFloat = 0
     @State private var showPreview = false
+    // 로컬 드래그 상태 - 드래그 중에는 이 값만 업데이트하여 뷰 재렌더링 최소화
+    @State private var localDragOffset: CGFloat?
+    // 썸네일 찾기 최적화를 위한 인덱스 캐시
+    @State private var lastThumbnailIndex: Int = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -500,24 +507,68 @@ struct TimelineTrimView: View {
             let selectedDuration = max(clip.trimDuration, 0.1)
             let minWindowWidth: CGFloat = min(max(totalWidth * 0.2, 110), totalWidth)
             let rawWidth = CGFloat(selectedDuration / duration) * totalWidth
+            
+            // 계산 결과 (캐싱 제거 - SwiftUI가 자동으로 최적화)
             let selectionWidth = min(max(rawWidth.isFinite ? rawWidth : totalWidth, minWindowWidth), totalWidth)
             let travel = max(totalWidth - selectionWidth, 0)
             let maxStart = max(duration - selectedDuration, 0)
-            let ratio = maxStart > 0 ? clip.trimStart / maxStart : 0
-            let clampedRatio = min(max(ratio, 0), 1)
-            let selectionOffset = travel * CGFloat(clampedRatio)
+            
+            // 드래그 중이면 로컬 offset 사용, 아니면 실제 clip.trimStart 사용
+            let (ratio, selectionOffset): (Double, CGFloat) = {
+                if let localOffset = localDragOffset {
+                    // 드래그 중: 로컬 offset 사용
+                    let calculatedRatio = travel > 0 ? Double(localOffset / travel) : 0
+                    return (calculatedRatio, localOffset)
+                } else {
+                    // 드래그 중이 아님: 실제 clip.trimStart 사용
+                    let calculatedRatio = maxStart > 0 ? clip.trimStart / maxStart : 0
+                    let clampedRatio = min(max(calculatedRatio, 0), 1)
+                    let calculatedOffset = travel * CGFloat(clampedRatio)
+                    return (calculatedRatio, calculatedOffset)
+                }
+            }()
 
+            // 썸네일 찾기 최적화 - 이진 검색 대신 인덱스 기반 접근
             let nearestThumbnail: (Double) -> UIImage? = { time in
                 guard !clip.timelineFrames.isEmpty else { return nil }
                 let target = min(max(time, 0), clip.duration)
-                let nearest = clip.timelineFrames.min(by: { abs($0.time - target) < abs($1.time - target) })
-                return nearest?.thumbnail
+                
+                // 마지막 인덱스 주변부터 검색 (연속된 드래그에 최적화)
+                let startIndex = max(0, lastThumbnailIndex - 2)
+                let endIndex = min(clip.timelineFrames.count - 1, lastThumbnailIndex + 2)
+                
+                var nearest: (frame: MultiClipEditorViewModel.TimelineFrame, distance: Double)?
+                
+                // 주변 인덱스 먼저 검색
+                for i in startIndex...endIndex {
+                    let frame = clip.timelineFrames[i]
+                    let distance = abs(frame.time - target)
+                    if nearest == nil || distance < nearest!.distance {
+                        nearest = (frame, distance)
+                        lastThumbnailIndex = i
+                    }
+                }
+                
+                // 주변에서 찾지 못하면 전체 검색
+                if nearest == nil || nearest!.distance > 0.5 {
+                    for (index, frame) in clip.timelineFrames.enumerated() {
+                        let distance = abs(frame.time - target)
+                        if nearest == nil || distance < nearest!.distance {
+                            nearest = (frame, distance)
+                            lastThumbnailIndex = index
+                        }
+                    }
+                }
+                
+                return nearest?.frame.thumbnail
             }
 
+            // 프리뷰 표시 최적화 - throttle 적용
             let presentPreview: (Double, CGFloat) -> Void = { time, offset in
                 let clampedTime = min(max(time, 0), clip.duration)
                 previewTime = clampedTime
                 previewOffset = min(max(offset, 0), travel)
+                // 썸네일 찾기는 드래그 중에는 덜 자주 호출되도록 최적화
                 previewImage = nearestThumbnail(clampedTime)
                 showPreview = previewImage != nil
             }
@@ -575,17 +626,45 @@ struct TimelineTrimView: View {
                     .highPriorityGesture(
                         DragGesture()
                             .onChanged { value in
-                                if dragOrigin == nil { dragOrigin = selectionOffset }
+                                if dragOrigin == nil {
+                                    // 드래그 시작 시 현재 selectionOffset을 기준으로 설정
+                                    // localDragOffset이 있으면 그것을 사용, 없으면 실제 clip.trimStart 기반 계산값 사용
+                                    let startOffset = localDragOffset ?? selectionOffset
+                                    dragOrigin = startOffset
+                                    localDragOffset = startOffset
+                                }
                                 let origin = dragOrigin ?? selectionOffset
                                 let newOffset = min(max(origin + value.translation.width, 0), travel)
+                                
+                                // 드래그 중에는 로컬 상태만 업데이트 (뷰 재렌더링 최소화)
+                                localDragOffset = newOffset
+                                
+                                // 프리뷰는 덜 자주 업데이트 (성능 최적화)
                                 let newRatio = travel > 0 ? Double(newOffset / travel) : 0
                                 let newStart = newRatio * maxStart
-                                presentPreview(newStart, newOffset)
-                                onTrimStartChange(newStart)
+                                
+                                // 프리뷰는 드래그가 일정 거리 이상 이동했을 때만 업데이트
+                                if abs(previewOffset - newOffset) > 10 {
+                                    presentPreview(newStart, newOffset)
+                                }
+                                
+                                // 실제 상태 업데이트는 하지 않음 (드래그 종료 시에만)
                             }
                             .onEnded { _ in
+                                // 드래그 종료 시 실제 상태 업데이트
+                                if let finalOffset = localDragOffset {
+                                    let finalRatio = travel > 0 ? Double(finalOffset / travel) : 0
+                                    let finalStart = finalRatio * maxStart
+                                    onTrimStartChange(finalStart)
+                                }
+                                
+                                // 상태 초기화는 onDragEnd 콜백 호출 후에 수행
+                                // (상태 업데이트가 완료된 후 초기화하여 다음 드래그 준비)
                                 dragOrigin = nil
+                                localDragOffset = nil
                                 showPreview = false
+                                
+                                // onDragEnd 콜백 호출 (미리보기 재생성 등)
                                 onDragEnd()
                             }
                     )
@@ -612,6 +691,19 @@ struct TimelineTrimView: View {
                     .transition(.opacity)
                 }
             }
+            .onChange(of: clip.id) { _, _ in
+                // clip이 변경되면 로컬 상태 초기화
+                localDragOffset = nil
+                lastThumbnailIndex = 0
+                dragOrigin = nil
+            }
+            .onChange(of: clip.trimStart) { _, _ in
+                // clip.trimStart가 변경되면 로컬 드래그 상태 초기화 (상태 동기화)
+                if localDragOffset == nil {
+                    // 드래그 중이 아닐 때만 초기화 (드래그 중에는 로컬 상태 유지)
+                    dragOrigin = nil
+                }
+            }
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -619,20 +711,35 @@ struct TimelineTrimView: View {
                         // 노란 박스가 아닌 영역에서만 작동하도록
                         guard isSelected else { return }
                         // 노란 박스 영역인지 확인 (offset을 고려)
-                        let boxStart = selectionOffset
-                        let boxEnd = selectionOffset + selectionWidth
+                        let currentOffset = localDragOffset ?? selectionOffset
+                        let boxStart = currentOffset
+                        let boxEnd = currentOffset + selectionWidth
                         let touchX = value.location.x
                         
                         // 노란 박스 영역이 아니면 전체 타임라인 드래그
                         if touchX < boxStart || touchX > boxEnd {
                             let rawOffset = min(max(value.location.x - selectionWidth / 2, 0), travel)
+                            
+                            // 드래그 중에는 로컬 상태만 업데이트
+                            localDragOffset = rawOffset
+                            
                             let newRatio = travel > 0 ? Double(rawOffset / travel) : 0
                             let newStart = newRatio * maxStart
-                            presentPreview(newStart, rawOffset)
-                            onTrimStartChange(newStart)
+                            
+                            // 프리뷰는 덜 자주 업데이트
+                            if abs(previewOffset - rawOffset) > 10 {
+                                presentPreview(newStart, rawOffset)
+                            }
                         }
                     }
                     .onEnded { _ in
+                        // 드래그 종료 시 실제 상태 업데이트
+                        if let finalOffset = localDragOffset {
+                            let finalRatio = travel > 0 ? Double(finalOffset / travel) : 0
+                            let finalStart = finalRatio * maxStart
+                            onTrimStartChange(finalStart)
+                        }
+                        // 로컬 상태는 onDragEnd 콜백에서 초기화되도록 유지
                         showPreview = false
                     }
             )

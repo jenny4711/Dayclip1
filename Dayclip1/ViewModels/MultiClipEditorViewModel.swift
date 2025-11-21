@@ -277,17 +277,42 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         var storedURLs: [URL] = []
         var built: [EditorClip] = []
+        
+        // 저장된 편집 정보 로드 (trim 정보 복원용)
+        let savedComposition = VideoStorageManager.shared.loadEditingComposition(for: draft.date)
+        let filenameToSelection: [String: PersistableEditingComposition.PersistableClipSelection] = {
+            guard let savedComposition = savedComposition else { return [:] }
+            return Dictionary(uniqueKeysWithValues: savedComposition.clipSelections.map { ($0.filename, $0) })
+        }()
+        
         for result in results.sorted(by: { $0.index < $1.index }) {
-            let initialDuration = min(defaultTrimDuration, max(result.duration, 0.1))
+            let filename = result.url.lastPathComponent
+            let savedSelection = filenameToSelection[filename]
+            
+            // 저장된 편집 정보가 있으면 복원, 없으면 기본값 사용
+            let trimStart: Double
+            let trimDuration: Double
+            let rotationQuarterTurns: Int
+            
+            if let saved = savedSelection {
+                trimStart = saved.trimStart
+                trimDuration = min(saved.trimDuration, result.duration - trimStart)
+                rotationQuarterTurns = saved.rotationQuarterTurns
+            } else {
+                trimStart = 0
+                trimDuration = min(defaultTrimDuration, max(result.duration, 0.1))
+                rotationQuarterTurns = 0
+            }
+            
             let frames = makeTimelineFrames(duration: result.duration)
             built.append(EditorClip(order: result.index,
                                     url: result.url,
                                     asset: result.asset,
                                     duration: result.duration,
                                     renderSize: result.renderSize,
-                                    rotationQuarterTurns: 0,
-                                    trimDuration: initialDuration,
-                                    trimStart: 0,
+                                    rotationQuarterTurns: rotationQuarterTurns,
+                                    trimDuration: trimDuration,
+                                    trimStart: trimStart,
                                     timelineFrames: frames))
             storedURLs.append(result.url)
         }
