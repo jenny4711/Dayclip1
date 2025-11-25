@@ -26,6 +26,7 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
+
 // MARK: - Multi Clip Editor Screen
 
 struct MultiClipEditorView: View {
@@ -36,6 +37,7 @@ struct MultiClipEditorView: View {
 
     @StateObject private var viewModel: MultiClipEditorViewModel
     @State private var muteAudio = false
+    @State private var showPlayPauseButton = true // 재생/일시정지 버튼 표시 여부
 
     init(draft: EditorDraft, onCancel: @escaping () -> Void, onComplete: @escaping (EditorCompositionDraft?) -> Void, onDelete: @escaping () -> Void) {
         self.draft = draft
@@ -112,7 +114,8 @@ struct MultiClipEditorView: View {
                                 }
                                 .scrollBounceBehavior(.basedOnSize)
                                 .scrollDismissesKeyboard(.never)
-                                .frame(height: 86) // 타임라인 영역을 고정 높이로 제한 (파란색 공간 최소화)
+                                .frame(height: 86, alignment: .top) // 타임라인 영역을 고정 높이로 제한 (파란색 공간 최소화)
+                                .fixedSize(horizontal: false, vertical: true)
                             } else {
                                 // 로딩 중에는 빈 상태로 표시 (스피너 제거)
                                 Color.clear
@@ -138,7 +141,7 @@ struct MultiClipEditorView: View {
                             .padding(20)
                             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
-                } else if viewModel.isBuildingPreview {
+                } else if viewModel.isBlockingRebuild {
                     ZStack {
                         Color.black.opacity(0.5)
                             .ignoresSafeArea()
@@ -183,7 +186,7 @@ struct MultiClipEditorView: View {
                 
                 ToolbarItem(placement:.topBarTrailing){
                     // 로딩 중이 아닐 때만 Done 버튼 표시
-                    if !viewModel.isLoading && !viewModel.isBuildingPreview {
+                    if !viewModel.isLoading && !viewModel.isBlockingRebuild {
                         Button {
                             viewModel.stopPlayback()
                             let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
@@ -214,6 +217,22 @@ struct MultiClipEditorView: View {
         }
         .onDisappear {
             viewModel.stopPlayback()
+        }
+        .onChange(of: viewModel.isPlaying) { oldValue, newValue in
+            if newValue {
+                // 재생 시작 시 버튼을 잠시 보여준 후 숨김
+                showPlayPauseButton = true
+                // 1초 후 버튼 숨김
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1초
+                    if viewModel.isPlaying {
+                        showPlayPauseButton = false
+                    }
+                }
+            } else {
+                // 재생 중지 시 버튼 표시
+                showPlayPauseButton = true
+            }
         }
         .background(Color.black
             .ignoresSafeArea()
@@ -412,18 +431,15 @@ struct MultiClipEditorView: View {
                         .background(.thinMaterial, in: Capsule())
                 }
                 
-                // 재생 버튼 오버레이 (일시정지 상태일 때만 표시)
-                if !viewModel.isLoading && viewModel.hasSelection && !viewModel.isBuildingPreview && !viewModel.isPlaying {
+                // 재생/일시정지 버튼 오버레이
+                // 재생 중일 때는 잠시 보여준 후 숨김, 재생 중이 아닐 때는 항상 표시
+                if !viewModel.isLoading && viewModel.hasSelection && !viewModel.isBlockingRebuild && showPlayPauseButton {
                     Button {
                         viewModel.togglePlayback()
                     } label: {
-                        Image("stop")
-                            .renderingMode(.original)
-                            .resizable()
-                            .interpolation(.none)
-                            .antialiased(false)
-                            .scaledToFit()
-                            .frame(width: 60, height: 60)
+                        Image(systemName: viewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 60, weight: .regular))
+                            .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
                 }
@@ -439,39 +455,50 @@ struct MultiClipEditorView: View {
     // PRD: 하단 기능 아이콘 영역
     private var bottomControlsSection: some View {
         HStack {
-            // 로딩 중이 아닐 때만 아이콘 표시 (비디오 로딩 또는 타임라인 로딩 중 모두 숨김)
-            if !viewModel.isLoading && !viewModel.isBuildingPreview {
-                // 음소거 토글 버튼 (왼쪽)
-                Button {
-                    muteAudio.toggle()
-                    Task { await viewModel.rebuildPreviewPlayer(muteOriginal: muteAudio) }
-                } label: {
-                    Image(muteAudio ? "soundOFF" : "soundON")
-                        .renderingMode(.original)
-                        .resizable()
-                      
-                        .interpolation(.none)
-                        .antialiased(false)
-                        .scaledToFit()
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.white)
+            // 로딩 중이 아니고, 클립이 로드되었고, 타임라인이 준비되었을 때만 아이콘 표시
+            // clips.isEmpty 체크 추가: 영상과 타임라인이 보여지기 전까지 아이콘 숨김
+            if !viewModel.isLoading && !viewModel.isBlockingRebuild && !viewModel.clips.isEmpty {
+                // 타임라인 썸네일이 하나라도 로드되었는지 확인
+                let hasThumbnails = viewModel.clips.contains { clip in
+                    clip.timelineFrames.contains { $0.thumbnail != nil }
                 }
-                .buttonStyle(.plain)
-                .padding(.leading, 16)
                 
-                Spacer()
-                
-                // 휴지통 버튼 (오른쪽)
-                Button {
-                    viewModel.stopPlayback()
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.white)
-                        .font(.system(size: 20))
+                if hasThumbnails {
+                    // 음소거 토글 버튼 (왼쪽)
+                    Button {
+                        muteAudio.toggle()
+                        viewModel.setMuteOriginal(muteAudio)
+                    } label: {
+                        Image(muteAudio ? "soundOFF" : "soundON")
+                            .renderingMode(.original)
+                            .resizable()
+                          
+                            .interpolation(.none)
+                            .antialiased(false)
+                            .scaledToFit()
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 16)
+                    
+                    Spacer()
+                    
+                    // 휴지통 버튼 (오른쪽)
+                    Button {
+                        viewModel.stopPlayback()
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.white)
+                            .font(.system(size: 20))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 16)
+                } else {
+                    // 썸네일이 아직 로드되지 않았을 때는 빈 공간만 유지
+                    Spacer()
                 }
-                .buttonStyle(.plain)
-                .padding(.trailing, 16)
             } else {
                 // 로딩 중일 때는 빈 공간만 유지
                 Spacer()
@@ -508,10 +535,11 @@ struct MultiClipEditorView: View {
                     viewModel.finishScrubbing(at: progress, for: clip.id)
                 }
             )
-            .frame(height: 86)
+            .frame(height: 86, alignment: .top)
+            .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())
             .onTapGesture {
-                viewModel.selectedClipID = clip.id
+                viewModel.selectClip(clip.id)
             }
 
 //            HStack {
@@ -532,7 +560,7 @@ struct TimelineTrimView: View {
     let onTrimStartChange: (Double) -> Void
     let onScrub: (Double) -> Void  // progress (0.0-1.0) 기반 scrubbing
     let onFinishScrubbing: (Double) -> Void  // progress (0.0-1.0) 기반 finish
-
+    
     @State private var dragOrigin: CGFloat?
     @State private var previewImage: UIImage?
     @State private var previewTime: Double = 0
@@ -542,299 +570,306 @@ struct TimelineTrimView: View {
     @State private var localDragOffset: CGFloat?
     // 썸네일 찾기 최적화를 위한 인덱스 캐시
     @State private var lastThumbnailIndex: Int = 0
-
+    
     var body: some View {
         GeometryReader { geometry in
-            let totalWidth = geometry.size.width
-            let duration = max(clip.duration, 0.1)
-            let selectedDuration = max(clip.trimDuration, 0.1)
-            let minWindowWidth: CGFloat = min(max(totalWidth * 0.2, 110), totalWidth)
-            let rawWidth = CGFloat(selectedDuration / duration) * totalWidth
+            timelineContent(totalWidth: geometry.size.width)
+        }
+    }
+    
+    @ViewBuilder
+    private func timelineContent(totalWidth: CGFloat) -> some View {
+        let duration = max(clip.duration, 0.1)
+        let selectedDuration = max(clip.trimDuration, 0.1)
+        
+        let context = TimelineContext(
+            clip: clip,
+            totalWidth: totalWidth,
+            duration: duration,
+            selectedDuration: selectedDuration,
+            localDragOffset: localDragOffset
+        )
+        
+        let selectionWidth = context.selectionWidth
+        let travel = context.travel
+        let maxStart = context.maxStart
+        let selectionOffset = context.selectionOffset
+        
+        let nearestThumbnail: (Double) -> UIImage? = { time in
+            guard !clip.timelineFrames.isEmpty else { return nil }
+            let target = min(max(time, 0), clip.duration)
             
-            // 계산 결과 (캐싱 제거 - SwiftUI가 자동으로 최적화)
-            let selectionWidth = min(max(rawWidth.isFinite ? rawWidth : totalWidth, minWindowWidth), totalWidth)
-            let travel = max(totalWidth - selectionWidth, 0)
-            let maxStart = max(duration - selectedDuration, 0)
+            let startIndex = max(0, lastThumbnailIndex - 2)
+            let endIndex = min(clip.timelineFrames.count - 1, lastThumbnailIndex + 2)
             
-            // 드래그 중이면 로컬 offset 사용, 아니면 실제 clip.trimStart 사용
-            let (ratio, selectionOffset): (Double, CGFloat) = {
-                if let localOffset = localDragOffset {
-                    // 드래그 중: 로컬 offset 사용
-                    let calculatedRatio = travel > 0 ? Double(localOffset / travel) : 0
-                    return (calculatedRatio, localOffset)
-                } else {
-                    // 드래그 중이 아님: 실제 clip.trimStart 사용
-                    let calculatedRatio = maxStart > 0 ? clip.trimStart / maxStart : 0
-                    let clampedRatio = min(max(calculatedRatio, 0), 1)
-                    let calculatedOffset = travel * CGFloat(clampedRatio)
-                    return (calculatedRatio, calculatedOffset)
+            var nearest: (frame: MultiClipEditorViewModel.TimelineFrame, distance: Double)?
+            
+            for i in startIndex...endIndex {
+                let frame = clip.timelineFrames[i]
+                let distance = abs(frame.time - target)
+                if nearest == nil || distance < nearest!.distance {
+                    nearest = (frame, distance)
+                    lastThumbnailIndex = i
                 }
-            }()
-
-            // 썸네일 찾기 최적화 - 이진 검색 대신 인덱스 기반 접근
-            let nearestThumbnail: (Double) -> UIImage? = { time in
-                guard !clip.timelineFrames.isEmpty else { return nil }
-                let target = min(max(time, 0), clip.duration)
-                
-                // 마지막 인덱스 주변부터 검색 (연속된 드래그에 최적화)
-                let startIndex = max(0, lastThumbnailIndex - 2)
-                let endIndex = min(clip.timelineFrames.count - 1, lastThumbnailIndex + 2)
-                
-                var nearest: (frame: MultiClipEditorViewModel.TimelineFrame, distance: Double)?
-                
-                // 주변 인덱스 먼저 검색
-                for i in startIndex...endIndex {
-                    let frame = clip.timelineFrames[i]
+            }
+            
+            if nearest == nil || nearest!.distance > 0.5 {
+                for (index, frame) in clip.timelineFrames.enumerated() {
                     let distance = abs(frame.time - target)
                     if nearest == nil || distance < nearest!.distance {
                         nearest = (frame, distance)
-                        lastThumbnailIndex = i
+                        lastThumbnailIndex = index
                     }
                 }
-                
-                // 주변에서 찾지 못하면 전체 검색
-                if nearest == nil || nearest!.distance > 0.5 {
-                    for (index, frame) in clip.timelineFrames.enumerated() {
-                        let distance = abs(frame.time - target)
-                        if nearest == nil || distance < nearest!.distance {
-                            nearest = (frame, distance)
-                            lastThumbnailIndex = index
-                        }
-                    }
-                }
-                
-                return nearest?.frame.thumbnail
             }
-
-            // 프리뷰 표시 최적화 - throttle 적용
-            let presentPreview: (Double, CGFloat) -> Void = { time, offset in
-                let clampedTime = min(max(time, 0), clip.duration)
-                previewTime = clampedTime
-                previewOffset = min(max(offset, 0), travel)
-                // 썸네일 찾기는 드래그 중에는 덜 자주 호출되도록 최적화
-                previewImage = nearestThumbnail(clampedTime)
-                showPreview = previewImage != nil
+            
+            return nearest?.frame.thumbnail
+        }
+        
+        let presentPreview: (Double, CGFloat) -> Void = { time, offset in
+            let clampedTime = min(max(time, 0), clip.duration)
+            previewTime = clampedTime
+            previewOffset = min(max(offset, 0), travel)
+            previewImage = nearestThumbnail(clampedTime)
+            showPreview = previewImage != nil
+        }
+        
+        let applyDragOffset: (CGFloat) -> Void = { rawOffset in
+            let clampedOffset = context.clampOffset(rawOffset)
+            localDragOffset = clampedOffset
+            let progress = context.progress(for: clampedOffset)
+            let newStart = progress * maxStart
+            
+            if abs(previewOffset - clampedOffset) > 1 {
+                presentPreview(newStart, clampedOffset)
             }
-
-            ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(clip.timelineFrames) { frame in
-                        Group {
-                            if let image = frame.thumbnail {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                            } else {
-                                // 썸네일이 없을 때는 빈 공간만 표시 (스피너 제거)
-                                Color.secondary.opacity(0.18)
-                            }
-                        }
-                        .frame(width: max(CGFloat(frame.length / duration) * totalWidth, 4), height: 80)
-                        .clipped()
-                    }
-                }
+            
+            onScrub(progress)
+        }
+        
+        let finalizeDrag: () -> Void = {
+            if let finalOffset = localDragOffset {
+                let finalProgress = context.progress(for: finalOffset)
+                let finalStart = finalProgress * maxStart
+                onFinishScrubbing(finalProgress)
+                onTrimStartChange(finalStart)
+            }
+            
+            dragOrigin = nil
+            localDragOffset = nil
+            showPreview = false
+        }
+        
+        ZStack(alignment: .leading) {
+            Color.clear
                 .frame(height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-               
-                // 2초 선택 박스 (노란색) - 선택된 클립에만 표시
-                if isSelected {
-                    ZStack {
-                        // 배경
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.yellow.opacity(0.22))
-                            .frame(width: selectionWidth, height: 80)
-                        
-                        // 전체 테두리 (바깥쪽만 둥글게, 안쪽은 직각)
-                        SelectionBoxBorderShape(
-                            width: selectionWidth,
-                            height: 80,
-                            cornerRadius: 12,
-                            leftRightBorderWidth: 8,
-                            topBottomBorderWidth: 4
-                        )
-                        .fill(Color.yellow, style: FillStyle(eoFill: true))
-                        
-                        // 양방향 화살표 아이콘
-                        Image(systemName: "arrow.left.and.right")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(.yellow)
-                    }
-                    .frame(width: selectionWidth, height: 80)
-                    .offset(x: selectionOffset)
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(
-                        DragGesture()
-                            .onChanged { value in
-                                if dragOrigin == nil {
-                                    // 드래그 시작 시 현재 selectionOffset을 기준으로 설정
-                                    // localDragOffset이 있으면 그것을 사용, 없으면 실제 clip.trimStart 기반 계산값 사용
-                                    let startOffset = localDragOffset ?? selectionOffset
-                                    dragOrigin = startOffset
-                                    localDragOffset = startOffset
-                                }
-                                let origin = dragOrigin ?? selectionOffset
-                                let newOffset = min(max(origin + value.translation.width, 0), travel)
-                                
-                                // 드래그 중에는 로컬 상태만 업데이트 (뷰 재렌더링 최소화)
-                                localDragOffset = newOffset
-                                
-                                // progress 계산 (0.0-1.0)
-                                let progress = travel > 0 ? max(0.0, min(1.0, Double(newOffset / travel))) : 0.0
-                                let newStart = progress * maxStart
-                                
-                                // 프리뷰는 조금만 이동해도 즉시 업데이트 (1pt 이상)
-                                if abs(previewOffset - newOffset) > 1 {
-                                    presentPreview(newStart, newOffset)
-                                    // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
-                                    onScrub(progress)
-                                }
-                                
-                                // 실제 상태 업데이트는 하지 않음 (드래그 종료 시에만)
-                            }
-                            .onEnded { _ in
-                                // 드래그 종료 시 최종 progress 계산 및 finishScrubbing 호출
-                                if let finalOffset = localDragOffset {
-                                    let finalProgress = travel > 0 ? max(0.0, min(1.0, Double(finalOffset / travel))) : 0.0
-                                    let finalStart = finalProgress * maxStart
-                                    
-                                    // finishScrubbing 호출 (내부에서 trimStart 업데이트 및 rebuildPreviewPlayer 처리)
-                                    onFinishScrubbing(finalProgress)
-                                    
-                                    // 호환성을 위해 onTrimStartChange도 호출 (내부에서 중복 처리 방지됨)
-                                    onTrimStartChange(finalStart)
-                                }
-                                
-                                // 상태 초기화
-                                dragOrigin = nil
-                                localDragOffset = nil
-                                showPreview = false
-                            }
-                    )
-                }
-
-                if showPreview, let previewImage {
-                    let previewWidth: CGFloat = 120
-                    let clampedX = min(max(previewOffset + selectionWidth / 2, previewWidth / 2), geometry.size.width - previewWidth / 2)
-
-                    VStack(spacing: 6) {
-                        Image(uiImage: previewImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: previewWidth, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 2)
-                        Text(formatTime(previewTime))
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Color.black.opacity(0.7), in: Capsule())
-                    }
-                    .position(x: clampedX, y: -46)
-                    .transition(.opacity)
-                }
-            }
-            .onChange(of: clip.id) { _, _ in
-                // clip이 변경되면 로컬 상태 초기화
-                localDragOffset = nil
-                lastThumbnailIndex = 0
-                dragOrigin = nil
-            }
-            .onChange(of: clip.trimStart) { _, _ in
-                // clip.trimStart가 변경되면 로컬 드래그 상태 초기화 (상태 동기화)
-                if localDragOffset == nil {
-                    // 드래그 중이 아닐 때만 초기화 (드래그 중에는 로컬 상태 유지)
-                    dragOrigin = nil
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        // 노란 박스가 아닌 영역에서만 작동하도록
-                        guard isSelected else { return }
-                        // 노란 박스 영역인지 확인 (offset을 고려)
-                        let currentOffset = localDragOffset ?? selectionOffset
-                        let boxStart = currentOffset
-                        let boxEnd = currentOffset + selectionWidth
-                        let touchX = value.location.x
-                        
-                        // 노란 박스 영역이 아니면 전체 타임라인 드래그
-                        if touchX < boxStart || touchX > boxEnd {
-                            let rawOffset = min(max(value.location.x - selectionWidth / 2, 0), travel)
-                            
-                            // 드래그 중에는 로컬 상태만 업데이트
-                            localDragOffset = rawOffset
-                            
-                            let progress = travel > 0 ? max(0.0, min(1.0, Double(rawOffset / travel))) : 0.0
-                            let newStart = progress * maxStart
-                            
-                            // 프리뷰는 조금만 이동해도 즉시 업데이트 (1pt 이상)
-                            if abs(previewOffset - rawOffset) > 1 {
-                                presentPreview(newStart, rawOffset)
-                                // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (YouTube 스타일 scrubbing)
-                                onScrub(progress)
-                            }
+            
+            HStack(spacing: 0) {
+                ForEach(clip.timelineFrames) { frame in
+                    Group {
+                        if let image = frame.thumbnail {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Color.secondary.opacity(0.18)
                         }
+                    }
+                    .frame(width: max(CGFloat(frame.length / duration) * totalWidth, 4), height: 80)
+                    .clipped()
+                }
+            }
+            .frame(height: 80)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.yellow.opacity(isSelected ? 0.22 : 0))
+                    .frame(width: selectionWidth, height: 80)
+                
+                SelectionBoxBorderShape(
+                    width: selectionWidth,
+                    height: 80,
+                    cornerRadius: 12,
+                    leftRightBorderWidth: 8,
+                    topBottomBorderWidth: 4
+                )
+                .fill(Color.yellow, style: FillStyle(eoFill: true))
+                .opacity(isSelected ? 1 : 0)
+                
+                Image(systemName: "arrow.left.and.right")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.yellow)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .frame(width: selectionWidth, height: 80)
+            .offset(x: selectionOffset)
+            .contentShape(Rectangle())
+            .allowsHitTesting(isSelected)
+            .highPriorityGesture(
+                DragGesture()
+                    .onChanged { value in
+                        if dragOrigin == nil {
+                            let startOffset = localDragOffset ?? selectionOffset
+                            dragOrigin = startOffset
+                            localDragOffset = startOffset
+                        }
+                        let origin = dragOrigin ?? selectionOffset
+                        let newOffset = min(max(origin + value.translation.width, 0), travel)
+                        applyDragOffset(newOffset)
                     }
                     .onEnded { _ in
-                        // 드래그 종료 시 최종 progress 계산 및 finishScrubbing 호출
-                        if let finalOffset = localDragOffset {
-                            let finalProgress = travel > 0 ? max(0.0, min(1.0, Double(finalOffset / travel))) : 0.0
-                            let finalStart = finalProgress * maxStart
-                            
-                            // finishScrubbing 호출 (내부에서 trimStart 업데이트 및 rebuildPreviewPlayer 처리)
-                            onFinishScrubbing(finalProgress)
-                            
-                            // 호환성을 위해 onTrimStartChange도 호출
-                            onTrimStartChange(finalStart)
-                        }
-                        showPreview = false
+                        finalizeDrag()
                     }
             )
+            
+            if showPreview, let previewImage {
+                let previewWidth: CGFloat = 120
+                let clampedX = min(max(previewOffset + selectionWidth / 2, previewWidth / 2), totalWidth - previewWidth / 2)
+                
+                VStack(spacing: 6) {
+                    Image(uiImage: previewImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: previewWidth, height: 60)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 2)
+                    Text(formatTime(previewTime))
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.7), in: Capsule())
+                }
+                .position(x: clampedX, y: -46)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .frame(height: 80, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
+        .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard isSelected else { return }
+
+                        // 노란 박스 바깥을 잡으면 박스가 그 위치로 곧바로 이동할 수 있게 허용
+                        let clampedX = context.clampOffset(value.location.x - selectionWidth / 2)
+                        applyDragOffset(clampedX)
+                    }
+                    .onEnded { _ in
+                        guard isSelected else { return }
+                        finalizeDrag()
+                    }
+        )
+        .onChange(of: clip.id) { _, _ in
+            localDragOffset = nil
+            lastThumbnailIndex = 0
+            dragOrigin = nil
+        }
+        .onChange(of: clip.trimStart) { _, _ in
+            if localDragOffset == nil {
+                dragOrigin = nil
+            }
         }
     }
-
+    
     private func formatTime(_ time: Double) -> String {
         let total = Int(time.rounded())
         let minutes = total / 60
         let seconds = total % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
-}
-
-// MARK: - Selection Box Border Shape
-
-struct SelectionBoxBorderShape: Shape {
-    let width: CGFloat
-    let height: CGFloat
-    let cornerRadius: CGFloat
-    let leftRightBorderWidth: CGFloat
-    let topBottomBorderWidth: CGFloat
     
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let r = cornerRadius
-        let lrWidth = leftRightBorderWidth
-        let tbWidth = topBottomBorderWidth
+    private struct TimelineContext {
+        let selectionWidth: CGFloat
+        let travel: CGFloat
+        let maxStart: Double
+        let selectionOffset: CGFloat
+        let clip: MultiClipEditorViewModel.EditorClip
         
-        // 외부 경로 (바깥쪽 둥근 사각형) - 시계방향
-        let outerRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
-        path.addRoundedRect(in: outerRect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+        init(clip: MultiClipEditorViewModel.EditorClip,
+             totalWidth: CGFloat,
+             duration: Double,
+             selectedDuration: Double,
+             localDragOffset: CGFloat?) {
+            self.clip = clip
+            let minWindowWidth: CGFloat = min(max(totalWidth * 0.2, 110), totalWidth)
+            let rawWidth = CGFloat(selectedDuration / duration) * totalWidth
+            self.selectionWidth = min(max(rawWidth.isFinite ? rawWidth : totalWidth, minWindowWidth), totalWidth)
+            self.travel = max(totalWidth - selectionWidth, 0)
+            self.maxStart = max(duration - selectedDuration, 0)
+            self.selectionOffset = TimelineContext.selectionOffset(
+                travel: travel,
+                maxStart: maxStart,
+                localDragOffset: localDragOffset,
+                clip: clip
+            )
+        }
         
-        // 내부 경로 (안쪽 직각 사각형) - 반시계방향으로 추가하여 홀 생성
-        let innerRect = CGRect(
-            x: lrWidth,
-            y: tbWidth,
-            width: width - lrWidth * 2,
-            height: height - tbWidth * 2
-        )
-        // 반시계방향으로 직사각형 추가
-        path.move(to: CGPoint(x: innerRect.minX, y: innerRect.minY))
-        path.addLine(to: CGPoint(x: innerRect.minX, y: innerRect.maxY))
-        path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.maxY))
-        path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.minY))
-        path.closeSubpath()
+        private static func selectionOffset(travel: CGFloat, maxStart: Double, localDragOffset: CGFloat?, clip: MultiClipEditorViewModel.EditorClip) -> CGFloat {
+            if let value = localDragOffset {
+                return min(max(value, 0), travel)
+            }
+            let ratio = maxStart > 0 ? clip.trimStart / maxStart : 0
+            let clamped = min(max(ratio, 0), 1)
+            return travel * CGFloat(clamped)
+        }
         
-        return path
+        func selectionOffset(localDragOffset: CGFloat?) -> CGFloat {
+            Self.selectionOffset(travel: travel, maxStart: maxStart, localDragOffset: localDragOffset, clip: clip)
+        }
+        
+        func selectionOffsetForCurrentState(localDragOffset: CGFloat?) -> CGFloat {
+            selectionOffset(localDragOffset: localDragOffset)
+        }
+        
+        func progress(for offset: CGFloat) -> Double {
+            guard travel > 0 else { return 0 }
+            return Double(min(max(offset / travel, 0), 1))
+        }
+        
+        func clampOffset(_ value: CGFloat) -> CGFloat {
+            min(max(value, 0), travel)
+        }
     }
+    
+    
+    // MARK: - Selection Box Border Shape
+    
+    struct SelectionBoxBorderShape: Shape {
+        let width: CGFloat
+        let height: CGFloat
+        let cornerRadius: CGFloat
+        let leftRightBorderWidth: CGFloat
+        let topBottomBorderWidth: CGFloat
+        
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            let r = cornerRadius
+            let lrWidth = leftRightBorderWidth
+            let tbWidth = topBottomBorderWidth
+            
+            // 외부 경로 (바깥쪽 둥근 사각형) - 시계방향
+            let outerRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+            path.addRoundedRect(in: outerRect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+            
+            // 내부 경로 (안쪽 직각 사각형) - 반시계방향으로 추가하여 홀 생성
+            let innerRect = CGRect(
+                x: lrWidth,
+                y: tbWidth,
+                width: width - lrWidth * 2,
+                height: height - tbWidth * 2
+            )
+            // 반시계방향으로 직사각형 추가
+            path.move(to: CGPoint(x: innerRect.minX, y: innerRect.minY))
+            path.addLine(to: CGPoint(x: innerRect.minX, y: innerRect.maxY))
+            path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.maxY))
+            path.addLine(to: CGPoint(x: innerRect.maxX, y: innerRect.minY))
+            path.closeSubpath()
+            
+            return path
+        }
+    }
+    
 }
