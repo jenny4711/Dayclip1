@@ -206,7 +206,22 @@ final class MonthlyPlaybackViewModel: ObservableObject {
     }
 
     private func finishPlayback() {
+        showFinalFrame()
+        player.pause()
+        isPlaying = false
         didFinish = true
+        removeObserver()
+        removeTimeObserver()
+    }
+    
+    private func showFinalFrame() {
+        guard let item = player.currentItem else { return }
+        let duration = item.duration
+        guard duration.isNumeric && duration.isValid else { return }
+        
+        let frameDuration = CMTime(value: 1, timescale: 30)
+        let targetTime = CMTimeMaximum(.zero, CMTimeSubtract(duration, frameDuration))
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 }
 

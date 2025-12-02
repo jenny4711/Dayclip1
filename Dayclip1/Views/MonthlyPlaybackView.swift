@@ -98,36 +98,25 @@ struct MonthlyPlaybackView: View {
                     viewModel.stop()
                     onClose()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .semibold))
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(Color.white.opacity(0.1))
-                        )
+                    glassyCircle(iconName: "xmark")
                 }
-                 .buttonStyle(.plain)
+                .buttonStyle(.plain)
                 
                 Spacer()
 
                 Button {
                     shareMonthlyCompilation()
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 18, weight: .semibold))
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(Color.white.opacity(0.1))
-                        )
+                    glassyCircle(iconName: "square.and.arrow.up")
                 }
                 .buttonStyle(.plain)
                 .disabled(isExportingShare || session.clips.isEmpty)
                 .opacity(isExportingShare || session.clips.isEmpty ? 0.5 : 1)
+                 
+               
             }
-            .foregroundStyle(.white)
             .padding(.horizontal, 20)
-            .padding(.top, 12)
+            .padding(.top, 10)
 
             Spacer()
 
@@ -159,6 +148,38 @@ struct MonthlyPlaybackView: View {
                     isExportingShare = false
                 }
             }
+        }
+    }
+}
+
+private extension MonthlyPlaybackView {
+    @ViewBuilder
+    func glassyCircle(iconName: String) -> some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.08))
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.45), lineWidth: 1.1)
+                        .blur(radius: 0.4)
+                )
+                .overlay(
+                    Circle()
+                        .fill(
+                            LinearGradient(colors: [
+                                Color.white.opacity(0.18),
+                                Color.white.opacity(0.05)
+                            ], startPoint: .top, endPoint: .bottom)
+                        )
+                        .padding(1)
+                )
+                // .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 4)
+                .frame(width: 46, height: 46)
+            
+            Image(systemName: iconName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
         }
     }
 }
