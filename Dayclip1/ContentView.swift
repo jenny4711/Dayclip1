@@ -14,7 +14,7 @@ struct ContentView: View {
     @State private var isShowingPicker = false
     @State private var selectedPickerItems: [PhotosPickerItem] = []
     @State private var showReplaceAlert = false
-    @State private var isSavingClip = false
+    @State private var savingDay: Date?
     @State private var errorMessage: String?
     @State private var editorDraft: EditorDraft?
     @State private var monthlyPlaybackSession: MonthlyPlaybackSession?
@@ -84,24 +84,6 @@ struct ContentView: View {
                 Text(errorMessage ?? "")
             }
 
-            // MARK: - 로딩 오버레이
-            .overlay {
-                if isSavingClip {
-                    ZStack {
-                        Color.black.opacity(0.35).ignoresSafeArea()
-                        ProgressView("영상을 저장 중입니다…")
-                            .padding(20)
-                            .background(
-                                .ultraThinMaterial,
-                                in: RoundedRectangle(
-                                    cornerRadius: 16,
-                                    style: .continuous
-                                )
-                            )
-                    }
-                }
-            }
-
             // MARK: - 에디터 / 월별 재생
             .fullScreenCover(item: $editorDraft) { draft in
                 MultiClipEditorView(
@@ -111,9 +93,11 @@ struct ContentView: View {
                         resetPendingSelection()
                     },
                     onComplete: { composition in
+                        let savingDate = draft.date
+                        savingDay = savingDate
                         editorDraft = nil
-                        Task {
-                            await handleEditorCompletion(composition)
+                        Task.detached(priority: .userInitiated) {
+                            await handleEditorCompletion(for: savingDate, composition: composition)
                         }
                     },
                     onDelete: {
@@ -147,6 +131,7 @@ struct ContentView: View {
                                viewportHeight: geometry.size.height,
                                viewportWidth: geometry.size.width,
                                clipCount: viewModel.clipCount(for: month),
+                               savingDay: savingDay,
                                onDaySelected: handleDaySelection
                            )
                            .frame(width: geometry.size.width)
@@ -279,7 +264,7 @@ struct ContentView: View {
 
     private func deleteClip(_ clip: DayClip) async {
         await MainActor.run {
-            isSavingClip = true
+            savingDay = clip.date
         }
 
         do {
@@ -297,13 +282,13 @@ struct ContentView: View {
         }
 
         await MainActor.run {
-            isSavingClip = false
+            savingDay = nil
         }
     }
     
     private func deleteClipForDate(_ date: Date) async {
         await MainActor.run {
-            isSavingClip = true
+            savingDay = date
         }
 
         do {
@@ -329,38 +314,28 @@ struct ContentView: View {
         }
 
         await MainActor.run {
-            isSavingClip = false
+            savingDay = nil
         }
     }
 
-    private func handleEditorCompletion(_ composition: EditorCompositionDraft?) async {
-        let day = await MainActor.run { pendingDaySelection }
-
-        guard let day else {
-            await MainActor.run {
-                errorMessage = "편집을 저장할 수 있는 날짜를 찾지 못했습니다."
-                resetPendingSelection()
-            }
-            return
-        }
-
+    private func handleEditorCompletion(for date: Date, composition: EditorCompositionDraft?) async {
         await MainActor.run {
-            isSavingClip = true
+            savingDay = date
         }
-
+        
         do {
             if let composition = composition {
                 // 클립이 있는 경우: 저장
                 let clip = try await VideoStorageManager.shared.exportComposition(
                     draft: composition,
-                    date: day.date
+                    date: date
                 )
 
                 try await ClipStore.shared.upsert(clip.metadata)
                 
                 // 편집 정보 저장 (trim 정보 포함)
-                let sourceURLs = VideoStorageManager.shared.loadEditingSources(for: day.date)
-                VideoStorageManager.shared.saveEditingComposition(composition, sourceURLs: sourceURLs, for: day.date)
+                let sourceURLs = VideoStorageManager.shared.loadEditingSources(for: date)
+                VideoStorageManager.shared.saveEditingComposition(composition, sourceURLs: sourceURLs, for: date)
 
                 await MainActor.run {
                     viewModel.setClip(clip)
@@ -368,14 +343,14 @@ struct ContentView: View {
                 }
             } else {
                 // 클립이 없는 경우: 빈 상태로 저장 (기존 클립 삭제)
-                if let existingClip = viewModel.clip(for: day.date) {
+                if let existingClip = viewModel.clip(for: date) {
                     try VideoStorageManager.shared.removeClip(existingClip)
-                    VideoStorageManager.shared.clearEditingSession(for: day.date)
-                    try await ClipStore.shared.deleteClip(for: day.date)
+                    VideoStorageManager.shared.clearEditingSession(for: date)
+                    try await ClipStore.shared.deleteClip(for: date)
                 }
                 
                 await MainActor.run {
-                    viewModel.removeClip(for: day.date)
+                    viewModel.removeClip(for: date)
                     resetPendingSelection()
                 }
             }
@@ -387,7 +362,7 @@ struct ContentView: View {
         }
 
         await MainActor.run {
-            isSavingClip = false
+            savingDay = nil
         }
     }
 
@@ -418,3 +393,4 @@ struct ContentView: View {
 #Preview {
     ContentView()
 }
+

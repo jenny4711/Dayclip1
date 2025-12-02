@@ -14,6 +14,7 @@ struct CalendarMonthPage: View {
     let viewportHeight: CGFloat
     let viewportWidth: CGFloat
     let clipCount: Int
+    let savingDay: Date?
     let onDaySelected: (CalendarDay) -> Void
 
     private let horizontalPadding: CGFloat = 20
@@ -29,6 +30,8 @@ struct CalendarMonthPage: View {
 
         let columns: [GridItem] = Array(repeating: GridItem(.fixed(cellWidth), spacing: cellSpacing), count: 7)
 
+        let calendar = Calendar.current
+        
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -54,8 +57,15 @@ struct CalendarMonthPage: View {
 
                 LazyVGrid(columns: columns, spacing: cellSpacing) {
                     ForEach(month.days) { day in
-                        DayCellView(day: day, size: CGSize(width: cellWidth, height: cellHeight), onTap: onDaySelected)
-                            
+                        let isSaving = savingDay.map {
+                            day.kind == .current && calendar.isDate(day.date, inSameDayAs: $0)
+                        } ?? false
+                        DayCellView(
+                            day: day,
+                            size: CGSize(width: cellWidth, height: cellHeight),
+                            isSaving: isSaving,
+                            onTap: onDaySelected
+                        )
                     }
                 }
                 .frame(height: gridHeight)
@@ -75,6 +85,7 @@ struct CalendarMonthPage: View {
 struct DayCellView: View {
     let day: CalendarDay
     let size: CGSize
+    let isSaving: Bool
     let onTap: (CalendarDay) -> Void
 
     private let cornerRadius: CGFloat = 8
@@ -89,6 +100,7 @@ struct DayCellView: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .disabled(isSaving)
             } else {
                 cellBody
             }
@@ -117,6 +129,14 @@ struct DayCellView: View {
                 .font(.system(size: 12).weight(.medium))
                 .foregroundStyle(day.thumbnail != nil ? .white : day.textColor)
                 .shadow(color: Color.black.opacity(day.thumbnail != nil ? 0.5 : 0.35), radius: 1, x: 0, y: 0)
+            
+            if isSaving {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.black.opacity(0.45))
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+            }
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
