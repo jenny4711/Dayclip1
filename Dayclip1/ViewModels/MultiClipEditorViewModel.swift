@@ -98,7 +98,7 @@ final class MultiClipEditorViewModel: ObservableObject {
     private var thumbnailTasks: [Task<Void, Never>] = []
     private var playerItemStatusObserver: NSKeyValueObservation?
     private let maxTimelineFrames = 80
-    private let defaultTrimDuration: Double = 2.0
+    private let defaultTrimDuration: Double = 1.0
     private var lastSeekTime: Double?
     private let seekThrottleInterval: TimeInterval = 0.03 // 0.03초마다 seek (매우 빠른 반응)
     private var segmentTimeObserver: Any? // 2초 세그먼트 재생 완료 감지용

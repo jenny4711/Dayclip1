@@ -36,6 +36,8 @@ struct MonthlyPlaybackView: View {
                 AspectFillVideoPlayer(player: viewModel.player)
                     .ignoresSafeArea()
                 
+                infoOverlay
+                
                 if viewModel.isLoading {
                     ProgressView("영상 준비 중...")
                         .progressViewStyle(.circular)
@@ -46,11 +48,6 @@ struct MonthlyPlaybackView: View {
                 }
             }
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer()
-                bottomSection
-            }
         }
         .onAppear {
             activatePlaybackAudioSession()
@@ -94,105 +91,53 @@ struct MonthlyPlaybackView: View {
         })
     }
 
-    private var topBar: some View {
-        HStack {
-            Button {
-                viewModel.stop()
-                onClose()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 32, height: 32)
+    private var infoOverlay: some View {
+        VStack {
+            HStack {
+                Button {
+                    viewModel.stop()
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.1))
+                        )
+                }
+                 .buttonStyle(.plain)
+                
+                Spacer()
+
+                Button {
+                    shareMonthlyCompilation()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.1))
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(isExportingShare || session.clips.isEmpty)
+                .opacity(isExportingShare || session.clips.isEmpty ? 0.5 : 1)
             }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
 
             Spacer()
 
-            Text(session.monthTitle) // "November 11, 2025"
-                .font(.system(size: 15, weight: .semibold))
-
-            Spacer()
-
-            Button("Done") {
-                viewModel.stop()
-                onClose()
-            }
-            .font(.system(size: 17, weight: .semibold))
+            Text(viewModel.currentClipLabel)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 40)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.top, 8)      // ✅ 딱 safe area 바로 밑 정도
-        .padding(.bottom, 8)
-        .background(
-            Color.black
-                .opacity(0.9)
-                .ignoresSafeArea(edges: .top)  // 배경만 safe area 침범
-        )
-    }
-
-    private var bottomSection: some View {
-        VStack(spacing: 18) {
-            if viewModel.didFinish {
-                Text("모든 영상을 재생했어요")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-
-                HStack(spacing: 16) {
-                    Button {
-                        viewModel.restart()
-                    } label: {
-                        Label("다시 재생", systemImage: "gobackward")
-                            .font(.headline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                    }
-                    .buttonStyle(PlayerActionButtonStyle())
-
-                    Button {
-                        viewModel.stop()
-                        onClose()
-                    } label: {
-                        Label("닫기", systemImage: "xmark")
-                            .font(.headline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                    }
-                    .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.12)))
-                }
-            } else {
-                Text(viewModel.currentClipLabel)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-
-                HStack(spacing: 16) {
-                    Button {
-                        viewModel.togglePlayback()
-                    } label: {
-                        Image(systemName: viewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 44, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-
-                    Button {
-                        viewModel.skipForward()
-                    } label: {
-                        Image(systemName: "forward.end.fill")
-                            .font(.system(size: 36, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(viewModel.hasNext ? .white : .white.opacity(0.35))
-                    .disabled(!viewModel.hasNext)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 32)
-        .padding(.bottom, 40)
-        .padding(.top, 24)
-        .background(
-            LinearGradient(colors: [Color.black.opacity(0), Color.black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea(edges: .bottom)
-        )
     }
 
     private func shareMonthlyCompilation() {

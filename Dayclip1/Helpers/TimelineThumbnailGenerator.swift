@@ -70,5 +70,5 @@ enum TimelineThumbnailGenerator {
 
 // MARK: - Constants
 
-let defaultTrimDuration: Double = 2.0
+let defaultTrimDuration: Double = 1.0
 

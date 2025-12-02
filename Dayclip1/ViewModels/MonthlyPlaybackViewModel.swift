@@ -34,8 +34,8 @@ final class MonthlyPlaybackViewModel: ObservableObject {
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.dateFormat = "M월 d일"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMMM d, yyyy"
         return formatter
     }()
 
@@ -206,11 +206,7 @@ final class MonthlyPlaybackViewModel: ObservableObject {
     }
 
     private func finishPlayback() {
-        player.pause()
-        isPlaying = false
         didFinish = true
-        removeObserver()
-        removeTimeObserver()
     }
 }
 
