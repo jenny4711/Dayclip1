@@ -42,16 +42,10 @@ struct AspectFitVideoPlayer: UIViewControllerRepresentable {
         controller.videoGravity = .resizeAspect
         controller.player = player
         controller.view.backgroundColor = .black
-        
-        // 영상 회전을 올바르게 처리하기 위해 videoGravity 설정
-        // AVPlayerViewController는 자동으로 preferredTransform을 처리하지만,
-        // 명시적으로 설정하여 회전 문제 방지
-        if let playerItem = player.currentItem,
-           let videoTrack = playerItem.asset.tracks(withMediaType: .video).first {
-            // preferredTransform이 있으면 자동으로 적용됨
-            // videoGravity = .resizeAspect는 비율을 유지하면서 회전도 올바르게 처리
-        }
-        
+
+        // AVPlayerViewController handles preferredTransform automatically.
+        // Keeping videoGravity as .resizeAspect ensures correct rotation and aspect.
+
         return controller
     }
 
@@ -59,8 +53,7 @@ struct AspectFitVideoPlayer: UIViewControllerRepresentable {
         if controller.player !== player {
             controller.player = player
         }
-        // videoGravity를 항상 .resizeAspect로 유지하여 회전 문제 방지
+        // Keep videoGravity as .resizeAspect to maintain correct rotation handling
         controller.videoGravity = .resizeAspect
     }
 }
-

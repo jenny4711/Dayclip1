@@ -75,7 +75,7 @@ struct VideoPlayerView: View {
                         }
                         .padding(.trailing, 4)
                     }
-                    .padding(.top, safeAreaInsets.top + 6)
+//                    .padding(.top, safeAreaInsets.top + 6)
                     .padding(.horizontal, 20)
 
                     Spacer()
@@ -88,7 +88,7 @@ struct VideoPlayerView: View {
                             Label("재편집", systemImage: "scissors")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
+//                                .padding(.vertical, 14)
                         }
                         .buttonStyle(PlayerActionButtonStyle(tint: Color.white.opacity(0.18)))
 
@@ -99,7 +99,7 @@ struct VideoPlayerView: View {
                             Label("새 영상 선택", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
+//                                .padding(.vertical, 14)
                         }
                         .buttonStyle(PlayerActionButtonStyle())
 
@@ -109,7 +109,7 @@ struct VideoPlayerView: View {
                             Label("삭제", systemImage: "trash")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
+//                                .padding(.vertical, 14)
                         }
                         .buttonStyle(PlayerActionButtonStyle(tint: Color.red.opacity(0.85)))
                         .confirmationDialog("Delete this clip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
@@ -125,7 +125,7 @@ struct VideoPlayerView: View {
                         }
                     }
                     .padding(.horizontal, 24)
-                    .padding(.bottom, max(safeAreaInsets.bottom + 24, 32))
+//                    .padding(.bottom, max(safeAreaInsets.bottom + 24, 32))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

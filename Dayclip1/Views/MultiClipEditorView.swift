@@ -24,7 +24,6 @@
 
 import SwiftUI
 import AVFoundation
-import UniformTypeIdentifiers
 
 
 // MARK: - Multi Clip Editor Screen
@@ -50,165 +49,14 @@ struct MultiClipEditorView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
-                // 헤더 위쪽 공간을 완전히 제거 (Safe Area = 0)
-                let reducedSafeAreaTop: CGFloat = 0 // 헤더 위쪽 공간 없음
-                let previewHeight = safePreviewHeight(screenHeight: geo.size.height, safeAreaInsets: geo.safeAreaInsets, screenWidth: geo.size.width, safeAreaTop: reducedSafeAreaTop)
-                // 프레임 높이를 안전하게 보장 (NaN, infinity, 음수 방지)
-                let safeFrameHeight: CGFloat = {
-                    if previewHeight.isFinite && !previewHeight.isNaN && previewHeight > 0 {
-                        return previewHeight + geo.safeAreaInsets.top // Safe Area 전체를 미리보기 영역에 추가
-                    }
-                    // 안전하지 않은 경우 최소값 사용
-                    let minHeight = max(geo.size.width * 1.2, 200)
-                    return minHeight.isFinite && !minHeight.isNaN ? minHeight : 200
-                }()
-                
-                // 타임라인 영역의 최대 높이 계산 (남은 공간만 사용)
-                let headerHeight: CGFloat = 88 // Safe Area 없이 헤더 높이만
-                let bottomControlsHeight: CGFloat = 50
-                let safeAreaBottom: CGFloat = geo.safeAreaInsets.bottom
-                let spaceBetweenVideoAndTimeline: CGFloat = 10
-                let spaceBelowTimeline: CGFloat = 60 // 타임라인 하단 여백 60pt
-                let timelineMaxHeight = geo.size.height - headerHeight - safeFrameHeight - bottomControlsHeight - spaceBetweenVideoAndTimeline - spaceBelowTimeline - safeAreaBottom
-
-                ZStack {
-                    Color.black
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 0) {
-//                        // PRD: 상단 헤더 영역 (고정 88pt, 위쪽 공간 없음) - 최상단에 배치
-//                        headerSection(safeAreaTop:0) // 헤더 위쪽 공간 없음
-//                            .zIndex(10) // 헤더가 항상 최상단에 표시되도록
-                       
-                        
-                        // PRD: 미리보기 영역 (동적 크기, 비율 유지) - 헤더 바로 아래
-                        previewSection(availableHeight: safeFrameHeight)
-                            .frame(height: safeFrameHeight)
-                            // .clipped() 제거하여 위아래가 잘리지 않도록
-                        
-                        // PRD: 하단 기능 아이콘 영역 (고정 50pt) - 미리보기 영역 바로 아래
-                        bottomControlsSection
-                            .frame(height: 50)
-                            .background(Color.black) // 검은색 배경으로 분리
-                        
-                        // 영상과 타임라인 사이 공간 (10pt로 줄여 미리보기 영역 확대)
-                        Spacer().frame(height: 10)
-                        
-                        // 타임라인 영역 - 음소거/휴지통 바로 아래
-                        Group {
-                            if let error = viewModel.errorMessage, viewModel.clips.isEmpty {
-                                Text(error)
-                                    .multilineTextAlignment(.center)
-                                    .foregroundStyle(.white)
-                                    .padding()
-                                    .frame(height: 86)
-                            } else if !viewModel.clips.isEmpty {
-                                ScrollView(.vertical, showsIndicators: false) {
-                                    VStack(alignment: .leading, spacing: 24) {
-                                        ForEach(viewModel.clips) { clip in
-                                            clipTimeline(clip)
-                                        }
-                                    }
-                                    .padding(.horizontal)
-                                    .padding(.bottom, 60) // 타임라인과 페이지 밑 부분 사이 공간 60pt
-                                }
-                                .scrollBounceBehavior(.basedOnSize)
-                                .scrollDismissesKeyboard(.never)
-                                .frame(height: 86, alignment: .top) // 타임라인 영역을 고정 높이로 제한 (파란색 공간 최소화)
-                                .fixedSize(horizontal: false, vertical: true)
-                            } else {
-                                // 로딩 중에는 빈 상태로 표시 (스피너 제거)
-                                Color.clear
-                                    .frame(height: 86)
-                            }
-                        }
-                   
-                        .padding(.bottom, 20) // 타임라인 아래 여백 20pt
-                    }
-                }
+                editorLayout(for: geo)
             }
             .navigationTitle(formattedDate)
             .navigationBarTitleDisplayMode(.inline)
-            // 화면 중앙에 전체 로딩 오버레이 하나만 표시
-            .overlay {
-                if viewModel.isLoading {
-                    ZStack {
-                        Color.black.opacity(0.7)
-                            .ignoresSafeArea()
-                        ProgressView("Downloading…")
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                            .padding(20)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                } else if viewModel.isBlockingRebuild {
-                    ZStack {
-                        Color.black.opacity(0.5)
-                            .ignoresSafeArea()
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                            .padding(20)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                }
-            }
-            .toolbar{
-                ToolbarItem(placement:.topBarLeading){
-                    Button {
-                        viewModel.stopPlayback()
-                        onCancel()
-                    } label: {
-                        
-
-                        Image(systemName: "xmark")
-                                                    .font(.system(size: 14))
-                                                    .foregroundStyle(.white)
-                                                    .frame(width: 35, height: 35)
-                        .buttonStyle(.plain)
-                        
-                        .glassEffect(
-                            .identity,
-                            in:.circle
-                                
-                        )
-                        
-
-                            
-                          
-
-                    }
-
-                
-                    
-  
-                }//:xBTN toolbarITEM
-                
-                ToolbarItem(placement:.topBarTrailing){
-                    // 로딩 중이 아닐 때만 Done 버튼 표시
-                    if !viewModel.isLoading && !viewModel.isBlockingRebuild {
-                        Button {
-                            viewModel.stopPlayback()
-                            let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
-                            onComplete(draft)
-                        } label: {
-                            Text("Done")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.white)
-                                .frame(width: 65, height: 40)
-                                
-                                .glassEffect(
-                                    .identity,
-                                    in:.capsule
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                
-
-                
-                
+            .overlay { blockingOverlay }
+            .toolbar {
+                cancelToolbar
+                doneToolbar
             }
         }
         
@@ -238,71 +86,117 @@ struct MultiClipEditorView: View {
             .ignoresSafeArea()
         )
     }
+    @ViewBuilder
+    private func editorLayout(for geo: GeometryProxy) -> some View {
+        let metrics = EditorLayoutMetrics(geometry: geo)
+        
+        return ZStack {
+            Color.black.ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                previewSection(availableHeight: metrics.videoAreaHeight)
+                    .frame(maxWidth: .infinity)
+                
+                bottomControlsBar(metrics: metrics)
+//                    .padding(.top, metrics.videoToControlsSpacing)
+//                    .padding(.bottom, metrics.safeBottomInset)
+            }
+            .padding(.top, metrics.contentTopInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            
+        }
+     
+    }
     
-    // PRD: 고정 영역 높이 계산 (타임라인 높이를 고려하여 미리보기 높이 계산)
-    private func calculatePreviewHeight(screenHeight: CGFloat, safeAreaInsets: EdgeInsets, safeAreaTop: CGFloat) -> CGFloat {
-        let headerHeight: CGFloat = 88 // 헤더 높이만 (Safe Area 없음)
-        let bottomControlsHeight: CGFloat = 50
-        let spaceBetweenVideoAndTimeline: CGFloat = 10 // 영상과 타임라인 사이 공간
-        let estimatedTimelineHeight: CGFloat = 86 // 타임라인 높이 (clipTimeline의 frame height)
-        let spaceBelowTimeline: CGFloat = 60 // 타임라인과 페이지 하단 사이 공간 60pt
-        let safeAreaBottom: CGFloat = safeAreaInsets.bottom
-        
-        // 모든 고정 영역을 제외한 미리보기 높이 계산
-        let calculatedHeight = screenHeight - headerHeight - bottomControlsHeight - spaceBetweenVideoAndTimeline - estimatedTimelineHeight - spaceBelowTimeline - safeAreaBottom
-        
-        return calculatedHeight
-    }
+    @ViewBuilder
+    private func timelineSection(containerHeight: CGFloat) -> some View {
+        if let error = viewModel.errorMessage, viewModel.clips.isEmpty {
+            Text(error)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
 
-    // Clamp to finite, non-negative (with a minimum to keep layout stable)
-    private func safePreviewHeight(screenHeight: CGFloat, safeAreaInsets: EdgeInsets, screenWidth: CGFloat, safeAreaTop: CGFloat) -> CGFloat {
-        // 입력값 유효성 검사
-        guard screenHeight.isFinite && !screenHeight.isNaN && screenHeight > 0,
-              screenWidth.isFinite && !screenWidth.isNaN && screenWidth > 0 else {
-            return 200 // 기본값 반환
-        }
-        
-        let h = calculatePreviewHeight(screenHeight: screenHeight, safeAreaInsets: safeAreaInsets, safeAreaTop: safeAreaTop)
-        
-        // 계산된 높이 유효성 검사
-        guard h.isFinite && !h.isNaN && h > 0 else {
-            // 최소 높이를 너비의 1.2배로 설정하여 세로가 더 긴 형태 보장
-            let minHeight = max(screenWidth * 1.2, 200)
-            return minHeight.isFinite && !minHeight.isNaN ? minHeight : 200
-        }
-        
-        return h
-    }
-
-    private var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.dateFormat = "MMMM d, yyyy"
-        return formatter.string(from: draft.date)
-    }
-
-    // PRD: 상단 헤더 영역
-    private func headerSection(safeAreaTop: CGFloat) -> some View {
-        ZStack {
-            HStack {
-                Button {
-                    viewModel.stopPlayback()
-                    onCancel()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white)
-                        .frame(width: 35, height: 35)
-                        .background(
-                            Circle()
-                                .fill(Color.gray.opacity(0.3))
-                        )
+                .frame(height: containerHeight)
+        } else if !viewModel.clips.isEmpty {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 24) {
+                    ForEach(viewModel.clips) { clip in
+                        clipTimeline(clip)
+                    }
                 }
-                .buttonStyle(.glass)
-//                .padding(.leading, 16)
-                
-                Spacer()
-                
+
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.never)
+            .frame(height: containerHeight, alignment: .top)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Color.clear
+                .frame(height: containerHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func bottomControlsBar(metrics: EditorLayoutMetrics) -> some View {
+        VStack(spacing: 12) {
+            bottomControlsSection
+                .frame(height: metrics.bottomControlsHeight)
+            
+            timelineSection(containerHeight: metrics.timelineHeight)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, 20)
+    }
+    
+    @ViewBuilder
+    private var blockingOverlay: some View {
+        if viewModel.isLoading || viewModel.isBlockingRebuild || !viewModel.isPlayerReady {
+            // Keep the "Downloading…" copy visible until all work (download, rebuild,
+            // player readiness) is finished so the UI doesn't switch to a bare spinner.
+            overlayCard(label: "Downloading…", opacity: 1)
+        }
+    }
+    
+    @ViewBuilder
+    private func overlayCard(label: String?, opacity: Double) -> some View {
+        ZStack {
+            Color.black.opacity(opacity).ignoresSafeArea()
+            if let label {
+                ProgressView(label)
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+//                    .padding(20)
+//                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+//                    .padding(20)
+//                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+        }
+    }
+    
+    @ToolbarContentBuilder
+    private var cancelToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                viewModel.stopPlayback()
+                onCancel()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .frame(width: 35, height: 35)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.identity, in: .circle)
+        }
+    }
+    
+    @ToolbarContentBuilder
+    private var doneToolbar: some ToolbarContent {
+        if !viewModel.isLoading && !viewModel.isBlockingRebuild && viewModel.isPlayerReady {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     viewModel.stopPlayback()
                     let draft = viewModel.makeCompositionDraft(muteOriginalAudio: muteAudio, backgroundTrack: nil)
@@ -312,127 +206,73 @@ struct MultiClipEditorView: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(width: 65, height: 40)
-                        .background(
-                            RoundedRectangle(cornerRadius: 50)
-                                .fill(Color.gray.opacity(0.3))
-                        )
                 }
                 .buttonStyle(.plain)
-                .glassEffect()
-//                .padding(.trailing, 16)
+                .glassEffect(.identity, in: .capsule)
             }
-            .padding(.top, 0) // 위쪽 패딩 없음
-            
-            // 날짜를 중앙에 배치
-            Text(formattedDate)
-                .font(.system(size: 17, weight: .regular))
-                .foregroundStyle(.white)
-                .padding(.top, 0) // 위쪽 패딩 없음
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 88) // 헤더 높이만 (위쪽 공간 없음)
-        .padding(.horizontal,16)
-        .background(Color.red)
-        
     }
     
-    // PRD: 미리보기 영역 (비율 유지, letterboxing)
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateFormat = "MMMM d, yyyy"
+        return formatter.string(from: draft.date)
+    }
+
+    private struct EditorLayoutMetrics {
+        private let geometry: GeometryProxy
+        
+        let bottomControlsHeight: CGFloat = 50
+        let timelineHeight: CGFloat = 86
+        let videoToControlsSpacing: CGFloat = 12
+        
+        init(geometry: GeometryProxy) {
+            self.geometry = geometry
+        }
+        
+        var safeTopInset: CGFloat { geometry.safeAreaInsets.top }
+        var safeBottomInset: CGFloat { geometry.safeAreaInsets.bottom }
+        var contentTopInset: CGFloat { 0 }
+        
+        private var bottomBarContentHeight: CGFloat {
+            timelineHeight + bottomControlsHeight
+        }
+        
+        var videoAreaHeight: CGFloat {
+            let available = geometry.size.height - contentTopInset - safeBottomInset - bottomBarContentHeight - videoToControlsSpacing
+            return max(available, 0)
+        }
+    }
+
+
+    
+    // MARK: Preview Area — occupies everything between nav & bottom controls
     private func previewSection(availableHeight: CGFloat) -> some View {
-        GeometryReader { geo in
-            let screenWidth = geo.size.width
-            
-            // PRD: 미리보기 영역 비율 설정 (width 283, height 544)
-            let previewAspectRatio: CGFloat = 283.0 / 544.0 // 약 0.52 (세로가 가로보다 약 1.92배 길음)
-            
-            // 컨테이너 크기 결정 (고정 비율 유지) - 클로저 표현식으로 변경
-            let (containerWidth, containerHeight): (CGFloat, CGFloat) = {
-                // 안전한 기본값
-                let safeAvailableHeight = availableHeight.isFinite && !availableHeight.isNaN && availableHeight > 0 ? availableHeight : 500
-                let safeScreenWidth = screenWidth.isFinite && !screenWidth.isNaN && screenWidth > 0 ? screenWidth : 200
-                
-                if safeScreenWidth / safeAvailableHeight > previewAspectRatio {
-                    // 화면이 더 넓음 → height 기준으로 width 계산
-                    let height = safeAvailableHeight
-                    let width = height * previewAspectRatio
-                    return (max(width, 100), max(height, 100))
-                } else {
-                    // 화면이 더 좁음 → width 기준으로 height 계산
-                    let width = safeScreenWidth
-                    let height = width / previewAspectRatio
-                    return (max(width, 100), max(height, 100))
-                }
-            }()
-            
-            // 영상 비율 가져오기 (회전 고려)
-            let videoAspect: CGFloat = {
-                if let aspectRatio = viewModel.currentVideoAspectRatio, aspectRatio.isFinite, aspectRatio > 0 {
-                    return aspectRatio
-                } else {
-                    // 기본값 (16:9)
-                    return 16.0 / 9.0
-                }
-            }()
-            
-            // PRD: 미리보기 크기 결정 로직 (컨테이너 비율 내에서 영상 비율 유지)
-            let safeContainerWidth = containerWidth.isFinite && !containerWidth.isNaN && containerWidth > 0 ? containerWidth : 200
-            let safeContainerHeight = containerHeight.isFinite && !containerHeight.isNaN && containerHeight > 0 ? containerHeight : 200
-            let containerAspect = safeContainerHeight > 0 ? (safeContainerWidth / safeContainerHeight) : 1
-            let (previewWidth, previewHeight): (CGFloat, CGFloat) = {
-                if videoAspect > containerAspect {
-                    // 가로가 더 긴 영상 → width 기준 스케일
-                    let width = safeContainerWidth
-                    let height = width / videoAspect
-                    return (max(width, 100), max(height, 100))
-                } else {
-                    // 세로가 더 긴 영상 → height 기준 스케일
-                    let height = safeContainerHeight
-                    let width = height * videoAspect
-                    return (max(width, 100), max(height, 100))
-                }
-            }()
+        let clampedHeight = max(availableHeight, 0)
+        
+        return GeometryReader { geo in
+            let containerSize = CGSize(width: geo.size.width, height: clampedHeight)
+            let aspect = viewModel.currentVideoAspectRatio ?? (9.0 / 16.0)
+            let videoSize = videoDisplaySize(for: aspect, in: containerSize)
             
             ZStack {
-                // 배경은 검은색 (빨간색 박스는 이 영역 안에만 있어야 함)
-                Color.black
-                 
-                 
-                
-                // 빨간색 박스와 비디오 플레이어를 중앙에 배치
-                // availableHeight를 최대한 활용하여 위아래가 잘리지 않도록
-                VStack(spacing: 0) {
-                    Spacer()
-                    ZStack {
-                        // 빨간색 박스 - availableHeight를 고려하여 크기 조정 (95% 사용하여 여유 공간 확보)
-                        let redBoxWidth = min(285, geo.size.width)
-                        let redBoxHeight = min(545, geo.size.height * 0.95) // 95% 사용하여 위아래 여유 공간 확보
-                        Color.black
-                            .frame(width: redBoxWidth, height: redBoxHeight)
-                        
-                        // PRD: AspectFit으로 변경하여 원본 비율 유지, 전체 표시
-                        VStack(alignment: .center) {
-                            Spacer()
-                            AspectFitVideoPlayer(player: viewModel.player)
-                                .frame(width: max(previewWidth, 100), height: max(previewHeight, 100))
-                                .frame(maxWidth: redBoxWidth * 0.96, maxHeight: redBoxHeight * 0.96) // 빨간 박스보다 작게 하여 위아래 여유 공간 확보
-                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            Spacer()
-                        }
-                        .frame(width: max(safeContainerWidth, 100), height: max(safeContainerHeight, 100))
-                    }
-                    Spacer()
-                }
-                .frame(height: geo.size.height) // 정확히 GeometryReader의 높이만 사용
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color.red)
+                    .frame(width: videoSize.width, height: videoSize.height)
+                    .overlay(
+                        AspectFitVideoPlayer(player: viewModel.player)
+                            .frame(width: videoSize.width, height: videoSize.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    )
                 
                 if !viewModel.hasSelection && !viewModel.isLoading {
                     Text("선택된 구간이 없습니다.")
                         .font(.footnote)
                         .foregroundStyle(.white)
-                        .padding(8)
                         .background(.thinMaterial, in: Capsule())
                 }
                 
-                // 재생/일시정지 버튼 오버레이
-                // 재생 중일 때는 잠시 보여준 후 숨김, 재생 중이 아닐 때는 항상 표시
                 if !viewModel.isLoading && viewModel.hasSelection && !viewModel.isBlockingRebuild && showPlayPauseButton {
                     Button {
                         viewModel.togglePlayback()
@@ -444,12 +284,63 @@ struct MultiClipEditorView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .frame(width: containerSize.width, height: containerSize.height, alignment: .center)
            
-            
         }
+        .frame(height: clampedHeight)
         .task {
             activatePlaybackAudioSession()
         }
+    }
+    
+    private func aspectFitSize(for aspectRatio: CGFloat, in container: CGSize) -> CGSize {
+        guard container.width > 0,
+              container.height > 0,
+              aspectRatio.isFinite,
+              aspectRatio > 0 else {
+            return .zero
+        }
+        
+        let containerAspect = container.width / container.height
+        if aspectRatio > containerAspect {
+            let width = container.width
+            return CGSize(width: width, height: width / aspectRatio)
+        } else {
+            let height = container.height
+            return CGSize(width: height * aspectRatio, height: height)
+        }
+    }
+    
+    /// Returns an aspect-fit size that prefers full width for landscape clips
+    /// and full height for portrait/square clips, while never exceeding the
+    /// provided container.
+    private func videoDisplaySize(for aspectRatio: CGFloat, in container: CGSize) -> CGSize {
+        guard container.width > 0,
+              container.height > 0,
+              aspectRatio.isFinite,
+              aspectRatio > 0 else {
+            return .zero
+        }
+        
+        // Step 1: choose the dominant dimension (width for landscape, height for portrait).
+        var targetWidth: CGFloat
+        var targetHeight: CGFloat
+        
+        if aspectRatio > 1 {
+            targetWidth = container.width
+            targetHeight = targetWidth / aspectRatio
+        } else {
+            targetHeight = container.height
+            targetWidth = targetHeight * aspectRatio
+        }
+        
+        // Step 2: if the preferred dimensions overflow the container, scale them
+        // down uniformly so the video remains fully visible (standard aspect-fit).
+        let widthScale = container.width / max(targetWidth, .leastNonzeroMagnitude)
+        let heightScale = container.height / max(targetHeight, .leastNonzeroMagnitude)
+        let scale = min(1, widthScale, heightScale)
+        
+        return CGSize(width: targetWidth * scale, height: targetHeight * scale)
     }
     
     // PRD: 하단 기능 아이콘 영역
@@ -497,7 +388,8 @@ struct MultiClipEditorView: View {
                     .padding(.trailing, 16)
                 } else {
                     // 썸네일이 아직 로드되지 않았을 때는 빈 공간만 유지
-                    Spacer()
+               
+            Spacer()
                 }
             } else {
                 // 로딩 중일 때는 빈 공간만 유지
@@ -505,7 +397,7 @@ struct MultiClipEditorView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(Color.black)
+      
     }
     
     private func clipTimeline(_ clip: MultiClipEditorViewModel.EditorClip) -> some View {
@@ -536,6 +428,7 @@ struct MultiClipEditorView: View {
                 }
             )
             .frame(height: 86, alignment: .top)
+            .background(.black)
             .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())
             .onTapGesture {
@@ -549,6 +442,8 @@ struct MultiClipEditorView: View {
 //                Spacer()
 //            }
         }
+     
+      
     }
 }
 
@@ -661,89 +556,28 @@ struct TimelineTrimView: View {
         }
         
         ZStack(alignment: .leading) {
-            Color.clear
-                .frame(height: 80)
-            
-            HStack(spacing: 0) {
-                ForEach(clip.timelineFrames) { frame in
-                    Group {
-                        if let image = frame.thumbnail {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Color.secondary.opacity(0.18)
+            Color.clear.frame(height: 80)
+            thumbnailStrip(totalWidth: totalWidth, duration: duration)
+            selectionOverlay(selectionWidth: selectionWidth, selectionOffset: selectionOffset)
+                .allowsHitTesting(isSelected)
+                .highPriorityGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragOrigin == nil {
+                                let startOffset = localDragOffset ?? selectionOffset
+                                dragOrigin = startOffset
+                                localDragOffset = startOffset
+                            }
+                            let origin = dragOrigin ?? selectionOffset
+                            let newOffset = min(max(origin + value.translation.width, 0), travel)
+                            applyDragOffset(newOffset)
                         }
-                    }
-                    .frame(width: max(CGFloat(frame.length / duration) * totalWidth, 4), height: 80)
-                    .clipped()
-                }
-            }
-            .frame(height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.yellow.opacity(isSelected ? 0.22 : 0))
-                    .frame(width: selectionWidth, height: 80)
-                
-                SelectionBoxBorderShape(
-                    width: selectionWidth,
-                    height: 80,
-                    cornerRadius: 12,
-                    leftRightBorderWidth: 8,
-                    topBottomBorderWidth: 4
+                        .onEnded { _ in
+                            finalizeDrag()
+                        }
                 )
-                .fill(Color.yellow, style: FillStyle(eoFill: true))
-                .opacity(isSelected ? 1 : 0)
-                
-                Image(systemName: "arrow.left.and.right")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(.yellow)
-                    .opacity(isSelected ? 1 : 0)
-            }
-            .frame(width: selectionWidth, height: 80)
-            .offset(x: selectionOffset)
-            .contentShape(Rectangle())
-            .allowsHitTesting(isSelected)
-            .highPriorityGesture(
-                DragGesture()
-                    .onChanged { value in
-                        if dragOrigin == nil {
-                            let startOffset = localDragOffset ?? selectionOffset
-                            dragOrigin = startOffset
-                            localDragOffset = startOffset
-                        }
-                        let origin = dragOrigin ?? selectionOffset
-                        let newOffset = min(max(origin + value.translation.width, 0), travel)
-                        applyDragOffset(newOffset)
-                    }
-                    .onEnded { _ in
-                        finalizeDrag()
-                    }
-            )
             
-            if showPreview, let previewImage {
-                let previewWidth: CGFloat = 120
-                let clampedX = min(max(previewOffset + selectionWidth / 2, previewWidth / 2), totalWidth - previewWidth / 2)
-                
-                VStack(spacing: 6) {
-                    Image(uiImage: previewImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: previewWidth, height: 60)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 2)
-                    Text(formatTime(previewTime))
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.7), in: Capsule())
-                }
-                .position(x: clampedX, y: -46)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
+            previewBubble(totalWidth: totalWidth, selectionWidth: selectionWidth)
         }
         .frame(height: 80, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
@@ -771,6 +605,84 @@ struct TimelineTrimView: View {
             if localDragOffset == nil {
                 dragOrigin = nil
             }
+        }
+    }
+    
+    @ViewBuilder
+    private func thumbnailStrip(totalWidth: CGFloat, duration: Double) -> some View {
+        HStack(spacing: 0) {
+            ForEach(clip.timelineFrames) { frame in
+                Group {
+                    if let image = frame.thumbnail {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Color.secondary.opacity(0.18)
+                    }
+                }
+                .frame(width: max(CGFloat(frame.length / duration) * totalWidth, 4), height: 80)
+                .clipped()
+            }
+        }
+        .frame(height: 80)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+    
+    private func selectionOverlay(selectionWidth: CGFloat, selectionOffset: CGFloat) -> some View {
+        selectionBox(width: selectionWidth)
+            .frame(width: selectionWidth, height: 80)
+            .offset(x: selectionOffset)
+            .contentShape(Rectangle())
+    }
+    
+    private func selectionBox(width: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.yellow.opacity(isSelected ? 0.22 : 0))
+            
+            SelectionBoxBorderShape(
+                width: width,
+                height: 80,
+                cornerRadius: 12,
+                leftRightBorderWidth: 8,
+                topBottomBorderWidth: 4
+            )
+            .fill(Color.yellow, style: FillStyle(eoFill: true))
+            .opacity(isSelected ? 1 : 0)
+            
+            Image(systemName: "arrow.left.and.right")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.yellow)
+                .opacity(isSelected ? 1 : 0)
+        }
+    }
+    
+    @ViewBuilder
+    private func previewBubble(totalWidth: CGFloat, selectionWidth: CGFloat) -> some View {
+        if showPreview, let previewImage {
+            let previewWidth: CGFloat = 120
+            let clampedX = min(
+                max(previewOffset + selectionWidth / 2, previewWidth / 2),
+                totalWidth - previewWidth / 2
+            )
+            
+            VStack(spacing: 6) {
+                Image(uiImage: previewImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: previewWidth, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 2)
+                Text(formatTime(previewTime))
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+//                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.7), in: Capsule())
+            }
+            .position(x: clampedX, y: -46)
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
     

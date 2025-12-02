@@ -6,14 +6,7 @@
 //
 
 import SwiftUI
-import Combine
 import PhotosUI
-import AVFoundation
-import AVKit
-import UniformTypeIdentifiers
-import UIKit
-import QuartzCore
-import CoreMedia
  // MARK: - contentView
 struct ContentView: View {
     @StateObject private var viewModel = CalendarViewModel()

@@ -45,6 +45,29 @@ final class MultiClipEditorViewModel: ObservableObject {
         var timelineFrames: [TimelineFrame]
     }
 
+    private func previewBuildContext(clips: [EditorClip], selectedClipID: UUID?) -> ([EditorClip], CMTime?) {
+        guard let selectedID = selectedClipID,
+              let selectedClip = clips.first(where: { $0.id == selectedID }) else {
+            let seekTime = selectedClipID.flatMap { timelineStartTime(of: $0, within: clips) }
+            return (clips, seekTime)
+        }
+        return ([selectedClip], .zero)
+    }
+
+    private func timelineStartTime(of clipID: UUID, within clips: [EditorClip]) -> CMTime? {
+        var cursor: CMTime = .zero
+        for clip in clips.sorted(by: { $0.order < $1.order }) {
+            if clip.id == clipID {
+                return cursor
+            }
+            let safeStart = min(max(clip.trimStart, 0), clip.duration)
+            let remaining = max(clip.duration - safeStart, 0)
+            let trimmedDuration = min(max(clip.trimDuration, 0.1), remaining)
+            cursor = CMTimeAdd(cursor, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
+        }
+        return nil
+    }
+
     struct TimelineFrame: Identifiable {
         let id = UUID()
         let index: Int
@@ -53,9 +76,7 @@ final class MultiClipEditorViewModel: ObservableObject {
         var thumbnail: UIImage?
     }
 
-    @Published var clips: [EditorClip] = [] {
-        didSet { compositionOffsetsDirty = true }
-    }
+    @Published var clips: [EditorClip] = []
     @Published var isLoading = true
     @Published var errorMessage: String?
     @Published var player: AVPlayer = {
@@ -66,6 +87,7 @@ final class MultiClipEditorViewModel: ObservableObject {
     @Published var isPlaying = false
     @Published var isBuildingPreview = false
     @Published var isBlockingRebuild = false
+    @Published var isPlayerReady = false
     @Published var selectedClipID: UUID? = nil
 
     private let draft: EditorDraft
@@ -74,15 +96,13 @@ final class MultiClipEditorViewModel: ObservableObject {
     private var rebuildTask: Task<AVPlayerItem?, Never>?
     private var seekTask: Task<Void, Never>?
     private var thumbnailTasks: [Task<Void, Never>] = []
+    private var playerItemStatusObserver: NSKeyValueObservation?
     private let maxTimelineFrames = 80
     private let defaultTrimDuration: Double = 2.0
     private var lastSeekTime: Double?
     private let seekThrottleInterval: TimeInterval = 0.03 // 0.03초마다 seek (매우 빠른 반응)
     private var segmentTimeObserver: Any? // 2초 세그먼트 재생 완료 감지용
     private var segmentEndObserver: NSObjectProtocol? // 재생 완료 알림용
-    private var previewRebuildDebounceTask: Task<Void, Never>?
-    private var compositionOffsets: [UUID: CMTime] = [:]
-    private var compositionOffsetsDirty = true
 
     init(draft: EditorDraft) {
         self.draft = draft
@@ -102,6 +122,8 @@ final class MultiClipEditorViewModel: ObservableObject {
         }
         selectedClipID = clipID
 
+        stopPlayback()
+
         Task { [weak self] in
             await self?.loadClipForPreview(clip)
         }
@@ -116,16 +138,31 @@ final class MultiClipEditorViewModel: ObservableObject {
         let item = AVPlayerItem(asset: clip.asset)
         await MainActor.run {
             player.replaceCurrentItem(with: item)
+            observePlayerReadiness(for: item)
             player.isMuted = currentMuteOriginal
             activatePlaybackAudioSession()
+        }
+    }
+    
+    private func observePlayerReadiness(for item: AVPlayerItem?) {
+        playerItemStatusObserver?.invalidate()
+        
+        guard let item else {
+            isPlayerReady = true
+            return
+        }
+        
+        isPlayerReady = false
+        playerItemStatusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
+            Task { @MainActor in
+                self?.isPlayerReady = observedItem.status == .readyToPlay
+            }
         }
     }
 
     func rebuildPreviewPlayer(muteOriginal: Bool? = nil,
                               backgroundTrack: BackgroundTrackSelection?? = nil,
                               showBlockingIndicator: Bool = true) async {
-        previewRebuildDebounceTask?.cancel()
-        previewRebuildDebounceTask = nil
         if let muteOriginal {
             currentMuteOriginal = muteOriginal
         }
@@ -140,6 +177,7 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         guard !clips.isEmpty else {
             player.replaceCurrentItem(with: nil)
+            observePlayerReadiness(for: nil)
             isPlaying = false
             isBuildingPreview = false
             if showBlockingIndicator {
@@ -152,6 +190,7 @@ final class MultiClipEditorViewModel: ObservableObject {
         let backgroundSelection = currentBackgroundTrack
         let clipsSnapshot = clips
         let renderSize = currentRenderSize
+        let (previewInput, initialSeekTime) = previewBuildContext(clips: clipsSnapshot, selectedClipID: selectedClipID)
 
         rebuildTask?.cancel()
         isBuildingPreview = true
@@ -160,17 +199,8 @@ final class MultiClipEditorViewModel: ObservableObject {
         }
 
         rebuildTask = Task(priority: .userInitiated) {
-            guard let selectedID = selectedClipID,
-                  let selectedClip = clipsSnapshot.first(where: { $0.id == selectedID }) ?? clipsSnapshot.first else {
-                return await MultiClipEditorViewModel.buildPreviewItem(
-                    clips: clipsSnapshot,
-                    muteOriginal: mute,
-                    backgroundSelection: backgroundSelection,
-                    renderSize: renderSize
-                )
-            }
-            return await MultiClipEditorViewModel.buildPreviewItem(
-                clips: [selectedClip],
+            await MultiClipEditorViewModel.buildPreviewItem(
+                clips: previewInput,
                 muteOriginal: mute,
                 backgroundSelection: backgroundSelection,
                 renderSize: renderSize
@@ -188,12 +218,12 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         await MainActor.run {
             player.replaceCurrentItem(with: item)
-            player.isMuted = false
+            observePlayerReadiness(for: item)
+            player.isMuted = currentMuteOriginal
             activatePlaybackAudioSession()
             
             // rebuildPreviewPlayer 완료 후 현재 선택된 클립의 trimStart 위치로 자동 seek
-            if let item, let selectedClipID = selectedClipID,
-               let targetTime = compositionOffset(for: selectedClipID) {
+            if let item, let targetTime = initialSeekTime {
                 item.seek(
                     to: targetTime,
                     toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
@@ -317,10 +347,6 @@ final class MultiClipEditorViewModel: ObservableObject {
     ///   - progress: 0.0-1.0 범위의 진행률 (타임라인에서의 위치)
     ///   - clipID: 선택된 클립의 ID
     func scrub(to progress: Double, for clipID: UUID?) {
-        // 사용자가 새 드래그를 시작하면 대기 중이던 재빌드 작업/디바운스를 모두 취소
-        previewRebuildDebounceTask?.cancel()
-        previewRebuildDebounceTask = nil
-
         if isBuildingPreview {
             rebuildTask?.cancel()
             rebuildTask = nil
@@ -417,173 +443,6 @@ final class MultiClipEditorViewModel: ObservableObject {
         }
     }
 
-    /// 클립의 원본 시간을 composition 내의 시간으로 변환
-    /// - Parameters:
-    ///   - clipTime: 원본 클립의 시간(초)
-    ///   - clipID: 클립의 ID
-    /// - Returns: composition 내의 CMTime, 변환 실패 시 nil
-    private func convertClipTimeToCompositionTime(clipTime: Double, for clipID: UUID) -> CMTime? {
-        guard let clip = clips.first(where: { $0.id == clipID }) else {
-            return nil
-        }
-        guard let baseOffset = compositionOffset(for: clipID) else {
-            return nil
-        }
-
-        let clampedTime = min(max(clipTime, 0), clip.duration)
-        let safeStart = min(max(clip.trimStart, 0), clip.duration)
-        let relativeTime = max(0, clampedTime - safeStart)
-        return CMTimeAdd(baseOffset, CMTime(seconds: relativeTime, preferredTimescale: 600))
-    }
-
-    private func compositionOffset(for clipID: UUID) -> CMTime? {
-        ensureCompositionOffsets()
-        return compositionOffsets[clipID]
-    }
-
-    private func ensureCompositionOffsets() {
-        guard compositionOffsetsDirty else { return }
-        compositionOffsets.removeAll(keepingCapacity: true)
-        var cursor: CMTime = .zero
-        for clip in clips.sorted(by: { $0.order < $1.order }) {
-            compositionOffsets[clip.id] = cursor
-            let safeStart = min(max(clip.trimStart, 0), clip.duration)
-            let remaining = max(clip.duration - safeStart, 0)
-            let trimmedDuration = min(max(clip.trimDuration, 0.1), remaining)
-            cursor = CMTimeAdd(cursor, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
-        }
-        compositionOffsetsDirty = false
-    }
-    
-    // 드래그 중 미리보기 영상의 재생 위치를 실시간으로 변경 (레거시 - 호환성을 위해 유지)
-    func seekPreviewToTime(time: Double, for clipID: UUID) {
-        // 재빌드 중이면 취소하고 바로 scrubbing 가능하게
-        if isBuildingPreview {
-            rebuildTask?.cancel()
-            isBuildingPreview = false
-            isBlockingRebuild = false
-        }
-        
-        // 현재 재생 중이면 일시정지
-        if isPlaying {
-            player.pause()
-            isPlaying = false
-        }
-        
-        // throttle: 너무 자주 호출되지 않도록 제한 (드래그 중에는 더 자주 업데이트)
-        let now = Date().timeIntervalSince1970
-        if let lastSeek = lastSeekTime,
-           now - lastSeek < seekThrottleInterval {
-            return
-        }
-        lastSeekTime = now
-        
-        // 이전 seek 작업 취소
-        seekTask?.cancel()
-        
-        guard let clip = clips.first(where: { $0.id == clipID }) else {
-            return
-        }
-        
-        // player.currentItem이 없으면 rebuildPreviewPlayer가 완료될 때까지 대기
-        guard let currentItem = player.currentItem else {
-            // currentItem이 없으면 나중에 다시 시도하기 위해 Task로 예약
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1초 대기
-                self?.seekPreviewToTime(time: time, for: clipID)
-            }
-            return
-        }
-        
-        // time은 사용자가 드래그한 새로운 시작 시간 (원본 영상의 시간)
-        // buildPreviewItem에서는 각 클립의 trimStart부터 시작하는 구간을 composition에 삽입하므로,
-        // composition 내에서의 시간 = 이전 클립들의 duration 합 + (time - 현재 클립의 trimStart)
-        
-        let clampedTime = min(max(time, 0), clip.duration)
-        
-        // 여러 클립이 있을 경우 order를 고려하여 composition 내의 시간 계산
-        // buildPreviewItem에서 사용하는 로직과 정확히 일치하도록 구현
-        let sortedClips = clips.sorted(by: { $0.order < $1.order })
-        var compositionTime: CMTime = .zero
-        
-        // 선택된 클립 이전의 모든 클립의 trimDuration을 합산
-        for previousClip in sortedClips {
-            if previousClip.id == clipID {
-                // 선택된 클립 내에서의 상대 시간 계산
-                // buildPreviewItem: trimStart부터 시작하는 구간을 cursor 위치에 삽입
-                // 따라서 composition 내에서의 시간 = 이전 클립들의 duration 합 + (clampedTime - trimStart)
-                // 주의: composition은 이전 trimStart 값으로 만들어졌으므로, 새로운 time 위치로 seek하려면
-                // 이전 trimStart를 기준으로 상대 시간을 계산해야 함
-                let currentTrimStart = previousClip.trimStart // 현재 composition에 사용된 trimStart
-                let safeStart = min(max(currentTrimStart, 0), previousClip.duration)
-                let relativeTime = max(0, clampedTime - safeStart) // trimStart 기준 상대 시간
-                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: relativeTime, preferredTimescale: 600))
-                break
-            } else {
-                // 이전 클립의 trimDuration 추가 (buildPreviewItem과 정확히 동일한 로직)
-                let safeStart = min(max(previousClip.trimStart, 0), previousClip.duration)
-                let remaining = max(previousClip.duration - safeStart, 0)
-                let trimmedDuration = min(max(previousClip.trimDuration, 0.1), remaining)
-                compositionTime = CMTimeAdd(compositionTime, CMTime(seconds: trimmedDuration, preferredTimescale: 600))
-            }
-        }
-        
-        seekTask = Task { @MainActor [weak self] in
-            guard let self = self, !Task.isCancelled else { return }
-            
-            // seek 실행 (tolerance를 설정하여 더 빠른 seek 가능)
-            await currentItem.seek(to: compositionTime, toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600))
-            
-            // seek 완료 후 Task 정리
-            if !Task.isCancelled {
-                self.seekTask = nil
-            }
-        }
-    }
-    
-    func playSelected2SecondRange(for clipID: UUID) async {
-        guard let clip = clips.first(where: { $0.id == clipID }) else { return }
-        guard let range = effectiveTrimRange(for: clip) else { return }
-        
-        // 선택된 클립의 2초 구간만 재생하기 위해 새로운 플레이어 아이템 생성
-        let asset = clip.asset
-        let composition = AVMutableComposition()
-        
-        guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
-              let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            return
-        }
-        
-        do {
-            try compositionVideoTrack.insertTimeRange(range, of: videoTrack, at: .zero)
-            
-            let audioTracks = try? await asset.loadTracks(withMediaType: .audio)
-            if let audioTrack = audioTracks?.first,
-               let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-                try compositionAudioTrack.insertTimeRange(range, of: audioTrack, at: .zero)
-            }
-            
-            let item = AVPlayerItem(asset: composition)
-            await MainActor.run {
-                player.replaceCurrentItem(with: item)
-                player.seek(to: .zero)
-                player.play()
-                isPlaying = true
-            }
-            
-            // 2초 후 자동 정지
-            try? await Task.sleep(nanoseconds: UInt64(range.duration.seconds * 1_000_000_000))
-            await MainActor.run {
-                if isPlaying {
-                    player.pause()
-                    isPlaying = false
-                }
-            }
-        } catch {
-            // 에러 처리
-        }
-    }
-
     func makeCompositionDraft(muteOriginalAudio: Bool, backgroundTrack: BackgroundTrackSelection?) -> EditorCompositionDraft? {
         let selections: [EditorClipSelection] = clips
             .sorted(by: { $0.order < $1.order })
@@ -627,7 +486,7 @@ final class MultiClipEditorViewModel: ObservableObject {
                             storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: url)
                         }
 
-                        let asset = AVAsset(url: storedURL)
+                        let asset = AVURLAsset(url: storedURL)
                         // 병렬로 메타데이터 로드
                         async let durationTime = asset.load(.duration)
                         async let videoTracks = asset.loadTracks(withMediaType: .video)
@@ -866,7 +725,7 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         if let backgroundSelection, let bgURL = backgroundSelection.option.resolvedURL() {
             do {
-                let bgAsset = AVAsset(url: bgURL)
+                let bgAsset = AVURLAsset(url: bgURL)
                 let bgTracks = try await bgAsset.loadTracks(withMediaType: .audio)
                 if let sourceBG = bgTracks.first,
                    let bgTrack = mixComposition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
@@ -957,7 +816,6 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         clips[index].trimStart = clampedStart
         clips[index].trimDuration = targetDuration
-        compositionOffsetsDirty = true
 
         // 드래그 중에는 미리보기 재생성을 건너뛰어 반응성 개선
         if rebuildPreview {
@@ -1009,7 +867,7 @@ final class MultiClipEditorViewModel: ObservableObject {
     }
 
     deinit {
-        previewRebuildDebounceTask?.cancel()
+        playerItemStatusObserver?.invalidate()
     }
 }
 
