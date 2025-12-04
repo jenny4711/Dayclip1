@@ -12,6 +12,8 @@ import Foundation
 enum VideoStorageError: LocalizedError {
     case assetUnavailable
     case thumbnailCreationFailed
+    case imageConversionFailed
+    case imageLoadFailed
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +21,10 @@ enum VideoStorageError: LocalizedError {
             return "선택한 영상을 불러올 수 없습니다."
         case .thumbnailCreationFailed:
             return "영상 썸네일을 생성할 수 없습니다."
+        case .imageConversionFailed:
+            return "이미지를 비디오로 변환하는 중 오류가 발생했습니다."
+        case .imageLoadFailed:
+            return "선택한 이미지를 불러올 수 없습니다."
         }
     }
 }

@@ -102,6 +102,217 @@ final class VideoStorageManager {
 
         return DayClip(date: normalizedDate, videoURL: storedVideoURL, thumbnailURL: thumbnailURL, thumbnail: thumbnailImage, createdAt: Date())
     }
+    
+    // MARK: - Image Storage
+    
+    /// 이미지를 즉시 저장하고 썸네일을 생성합니다. 비디오 변환은 백그라운드에서 진행됩니다.
+    func storeImage(from item: PhotosPickerItem, for date: Date) async throws -> DayClip {
+        guard let picked = try await item.loadTransferable(type: PickedImage.self) else {
+            throw VideoStorageError.imageLoadFailed
+        }
+        
+        let normalizedDate = calendar.startOfDay(for: date)
+        let folderName = folderFormatter.string(from: normalizedDate)
+        let targetDirectory = clipsDirectory.appendingPathComponent(folderName, isDirectory: true)
+        
+        if fileManager.fileExists(atPath: targetDirectory.path) {
+            try fileManager.removeItem(at: targetDirectory)
+        }
+        
+        try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        
+        // 이미지 파일을 임시로 저장 (나중에 비디오로 교체됨)
+        let imageExtension = picked.url.pathExtension.isEmpty ? "jpg" : picked.url.pathExtension
+        let tempImageURL = targetDirectory.appendingPathComponent("temp_image").appendingPathExtension(imageExtension)
+        
+        try fileManager.copyItem(at: picked.url, to: tempImageURL)
+        
+        defer {
+            try? fileManager.removeItem(at: picked.url)
+        }
+        
+        // 즉시 썸네일 생성 (로딩 없음)
+        guard let image = UIImage(contentsOfFile: tempImageURL.path) else {
+            throw VideoStorageError.imageLoadFailed
+        }
+        
+        let thumbnailImage = resizeImageForThumbnail(image)
+        let thumbnailURL = targetDirectory.appendingPathComponent("thumbnail.jpg")
+        
+        if let data = thumbnailImage.jpegData(compressionQuality: 0.85) {
+            try data.write(to: thumbnailURL, options: Data.WritingOptions.atomic)
+        } else {
+            throw VideoStorageError.thumbnailCreationFailed
+        }
+        
+        // 임시 비디오 URL 생성 (나중에 실제 비디오로 교체됨)
+        let tempVideoURL = targetDirectory.appendingPathComponent("clip").appendingPathExtension("mp4")
+        
+        // 백그라운드에서 이미지를 비디오로 변환 (1초)
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            do {
+                let videoURL = try await self.convertImageToVideo(imageURL: tempImageURL, outputURL: tempVideoURL, duration: 1.0)
+                // 변환 완료 후 임시 이미지 파일 삭제
+                try? self.fileManager.removeItem(at: tempImageURL)
+            } catch {
+                // 에러 발생 시 로그만 남기고 계속 진행
+                #if DEBUG
+                print("Failed to convert image to video: \(error)")
+                #endif
+            }
+        }
+        
+        // 즉시 DayClip 반환 (임시 비디오 URL 사용, 나중에 실제 비디오로 교체됨)
+        return DayClip(date: normalizedDate, videoURL: tempVideoURL, thumbnailURL: thumbnailURL, thumbnail: thumbnailImage, createdAt: Date())
+    }
+    
+    /// 이미지를 정적 비디오로 변환합니다.
+    private func convertImageToVideo(imageURL: URL, outputURL: URL, duration: Double) async throws -> URL {
+        guard let image = UIImage(contentsOfFile: imageURL.path),
+              let cgImage = image.cgImage else {
+            throw VideoStorageError.imageLoadFailed
+        }
+        
+        let renderSize = CGSize(width: 1080, height: 1920) // 세로 비디오 기준
+        let fps: Int32 = 30
+        let totalFrames = Int(duration * Double(fps))
+        
+        // 이미지 크기를 renderSize에 맞게 조정 (aspect fill)
+        let imageSize = image.size
+        let scale = max(renderSize.width / imageSize.width, renderSize.height / imageSize.height)
+        let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        let scaledImage = resizeImage(image, to: scaledSize)
+        guard let scaledCGImage = scaledImage.cgImage else {
+            throw VideoStorageError.imageConversionFailed
+        }
+        
+        // AVAssetWriter 설정
+        if fileManager.fileExists(atPath: outputURL.path) {
+            try fileManager.removeItem(at: outputURL)
+        }
+        
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: renderSize.width,
+            AVVideoHeightKey: renderSize.height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 2000000 // 2Mbps (정적 이미지이므로 낮은 비트레이트)
+            ]
+        ]
+        
+        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        writerInput.expectsMediaDataInRealTime = false
+        
+        let pixelBufferAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+            kCVPixelBufferWidthKey as String: renderSize.width,
+            kCVPixelBufferHeightKey as String: renderSize.height
+        ]
+        
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: writerInput,
+            sourcePixelBufferAttributes: pixelBufferAttributes
+        )
+        
+        guard writer.canAdd(writerInput) else {
+            throw VideoStorageError.imageConversionFailed
+        }
+        writer.add(writerInput)
+        
+        guard writer.startWriting() else {
+            throw VideoStorageError.imageConversionFailed
+        }
+        
+        writer.startSession(atSourceTime: .zero)
+        
+        // 이미지를 중앙에 배치하기 위한 오프셋 계산
+        let offsetX = (renderSize.width - scaledSize.width) / 2
+        let offsetY = (renderSize.height - scaledSize.height) / 2
+        
+        // 각 프레임에 동일한 이미지 추가
+        for frameIndex in 0..<totalFrames {
+            guard writerInput.isReadyForMoreMediaData else {
+                continue
+            }
+            
+            var pixelBuffer: CVPixelBuffer?
+            let status = CVPixelBufferPoolCreatePixelBuffer(
+                kCFAllocatorDefault,
+                adaptor.pixelBufferPool!,
+                &pixelBuffer
+            )
+            
+            guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+                continue
+            }
+            
+            CVPixelBufferLockBaseAddress(buffer, [])
+            defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+            
+            let context = CGContext(
+                data: CVPixelBufferGetBaseAddress(buffer),
+                width: Int(renderSize.width),
+                height: Int(renderSize.height),
+                bitsPerComponent: 8,
+                bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+            )
+            
+            // 배경을 검은색으로 채우기
+            context?.setFillColor(UIColor.black.cgColor)
+            context?.fill(CGRect(origin: .zero, size: renderSize))
+            
+            // 이미지를 중앙에 그리기
+            context?.draw(
+                scaledCGImage,
+                in: CGRect(origin: CGPoint(x: offsetX, y: offsetY), size: scaledSize)
+            )
+            
+            let presentationTime = CMTime(value: Int64(frameIndex), timescale: fps)
+            if !adaptor.append(buffer, withPresentationTime: presentationTime) {
+                throw VideoStorageError.imageConversionFailed
+            }
+        }
+        
+        writerInput.markAsFinished()
+        
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writer.finishWriting {
+                if writer.status == .completed {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: writer.error ?? VideoStorageError.imageConversionFailed)
+                }
+            }
+        }
+        
+        return outputURL
+    }
+    
+    /// 썸네일 생성을 위해 이미지 리사이즈
+    private func resizeImageForThumbnail(_ image: UIImage) -> UIImage {
+        let maxSize: CGFloat = 400
+        let size = image.size
+        
+        if size.width <= maxSize && size.height <= maxSize {
+            return image
+        }
+        
+        let scale = min(maxSize / size.width, maxSize / size.height)
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        return resizeImage(image, to: newSize)
+    }
+    
+    /// 이미지 리사이즈 헬퍼
+    private func resizeImage(_ image: UIImage, to size: CGSize) -> UIImage {
+        UIGraphicsBeginImageContextWithOptions(size, false, image.scale)
+        defer { UIGraphicsEndImageContext() }
+        image.draw(in: CGRect(origin: .zero, size: size))
+        return UIGraphicsGetImageFromCurrentImageContext() ?? image
+    }
 
     func removeClip(_ clip: DayClip) throws {
         let directory = clip.videoURL.deletingLastPathComponent()
@@ -151,24 +362,47 @@ final class VideoStorageManager {
             return sourceURL
         }
 
-        let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension
-        let destination = directory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(ext)
-
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
-        }
-
-        // 파일 복사를 백그라운드 스레드에서 실행
-        try await Task.detached(priority: .userInitiated) {
-            try FileManager.default.copyItem(at: sourceURL, to: destination)
-        }.value
+        // 이미지 파일인지 확인
+        let isImageFile = ["jpg", "jpeg", "png", "heic", "heif"].contains(sourceURL.pathExtension.lowercased())
         
-        if sourceURL.path.hasPrefix(NSTemporaryDirectory()) {
-            try? fileManager.removeItem(at: sourceURL)
+        if isImageFile {
+            // 이미지는 비디오로 변환
+            let destination = directory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mp4")
+            
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            
+            // 이미지를 비디오로 변환 (1초)
+            let videoURL = try await convertImageToVideo(imageURL: sourceURL, outputURL: destination, duration: 1.0)
+            
+            if sourceURL.path.hasPrefix(NSTemporaryDirectory()) {
+                try? fileManager.removeItem(at: sourceURL)
+            }
+            return videoURL
+        } else {
+            // 비디오 파일은 그대로 복사
+            let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension
+            let destination = directory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext)
+
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+
+            // 파일 복사를 백그라운드 스레드에서 실행
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.copyItem(at: sourceURL, to: destination)
+            }.value
+            
+            if sourceURL.path.hasPrefix(NSTemporaryDirectory()) {
+                try? fileManager.removeItem(at: sourceURL)
+            }
+            return destination
         }
-        return destination
     }
 
     struct EditingSourceRecord: Codable {

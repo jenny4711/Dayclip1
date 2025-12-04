@@ -34,12 +34,12 @@ struct ContentView: View {
                 }
                 .background(Color.black.ignoresSafeArea())
             }
-            // MARK: - 사진 선택
+            // MARK: - 사진/비디오 선택
             .photosPicker(
                 isPresented: $isShowingPicker,
                 selection: $selectedPickerItems,
                 maxSelectionCount: 1,
-                matching: .videos,
+                matching: .any(of: [.videos, .images]),
                 photoLibrary: .shared()
             )
             .onChange(of: selectedPickerItems) { _, newItems in
@@ -255,10 +255,45 @@ struct ContentView: View {
 
         VideoStorageManager.shared.clearEditingSession(for: day.date)
 
-        await MainActor.run {
-            editorDraft = EditorDraft(date: day.date, sources: [.picker(item)])
-            isShowingPicker = false
-            selectedPickerItems = []
+        // 이미지인지 비디오인지 확인
+        // 이미지면 바로 저장, 비디오면 편집 화면으로 이동
+        let isImage: Bool = await {
+            // 이미지 타입인지 확인
+            if let _ = try? await item.loadTransferable(type: PickedImage.self) {
+                return true
+            }
+            return false
+        }()
+
+        if isImage {
+            // 이미지는 즉시 저장 (로딩 없음)
+            await MainActor.run {
+                savingDay = day.date
+            }
+            
+            do {
+                let clip = try await VideoStorageManager.shared.storeImage(from: item, for: day.date)
+                try await ClipStore.shared.upsert(clip.metadata)
+                
+                await MainActor.run {
+                    viewModel.setClip(clip)
+                    resetPendingSelection()
+                    savingDay = nil
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "이미지를 저장하지 못했습니다.\n\(error.localizedDescription)"
+                    resetPendingSelection()
+                    savingDay = nil
+                }
+            }
+        } else {
+            // 비디오는 편집 화면으로 이동
+            await MainActor.run {
+                editorDraft = EditorDraft(date: day.date, sources: [.picker(item)])
+                isShowingPicker = false
+                selectedPickerItems = []
+            }
         }
     }
 

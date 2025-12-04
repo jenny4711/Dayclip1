@@ -480,8 +480,15 @@ final class MultiClipEditorViewModel: ObservableObject {
                         let storedURL: URL
                         switch source {
                         case .picker(let pickerItem):
-                            guard let movie = try await pickerItem.loadTransferable(type: PickedMovie.self) else { return nil }
-                            storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: movie.url)
+                            // 비디오 또는 이미지 처리
+                            if let movie = try? await pickerItem.loadTransferable(type: PickedMovie.self) {
+                                storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: movie.url)
+                            } else if let image = try? await pickerItem.loadTransferable(type: PickedImage.self) {
+                                // 이미지는 비디오로 변환 후 저장
+                                storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: image.url)
+                            } else {
+                                return nil
+                            }
                         case .file(let url):
                             storedURL = try await VideoStorageManager.shared.prepareEditingAsset(for: self.draft.date, sourceURL: url)
                         }
