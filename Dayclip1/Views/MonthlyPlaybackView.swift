@@ -35,6 +35,7 @@ struct MonthlyPlaybackView: View {
             } else {
                 AspectFillVideoPlayer(player: viewModel.player)
                     .ignoresSafeArea()
+                    .allowsHitTesting(false) // 비디오 플레이어가 터치 이벤트를 가로채지 않도록
                 
                 infoOverlay
                 
@@ -98,20 +99,52 @@ struct MonthlyPlaybackView: View {
                     viewModel.stop()
                     onClose()
                 } label: {
-                    glassyCircle(iconName: "xmark")
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16,weight: .semibold))
+                        .padding(.all,12)
+                        
+
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .background(.ultraThinMaterial)
+               
+                .clipShape(.circle)
+
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1)
+                }
+                .shadow(radius: 3)
+
+                
+                
+                
+                
+                
+                
+                
                 
                 Spacer()
 
                 Button {
                     shareMonthlyCompilation()
                 } label: {
-                    glassyCircle(iconName: "square.and.arrow.up")
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 16,weight: .semibold))
+                        .padding(.all,12)
+                       
+
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .background(.ultraThinMaterial)
+               
+                .clipShape(.circle)
+
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1)
+                }
+                .shadow(radius: 3)
                 .disabled(isExportingShare || session.clips.isEmpty)
-                .opacity(isExportingShare || session.clips.isEmpty ? 0.5 : 1)
+//                .opacity(isExportingShare || session.clips.isEmpty ? 0.5 : 1)
                  
                
             }

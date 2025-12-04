@@ -61,6 +61,7 @@ struct VideoPlayerView: View {
                                 .foregroundStyle(.white)
                                 .shadow(radius: 4)
                         }
+                        
 
                         Spacer()
 
