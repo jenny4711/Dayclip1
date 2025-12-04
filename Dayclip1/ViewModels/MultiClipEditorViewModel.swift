@@ -719,7 +719,7 @@ final class MultiClipEditorViewModel: ObservableObject {
                     try originalAudioTrack.insertTimeRange(range, of: sourceAudioTrack, at: cursor)
                 }
                 let outputRange = CMTimeRange(start: cursor, duration: range.duration)
-                placements.append(ClipPlacement(timeRange: outputRange, transform: combinedTransform))
+                placements.append(ClipPlacement(timeRange: outputRange, transform: combinedTransform, date: nil))
                 cursor = CMTimeAdd(cursor, range.duration)
             } catch {
                 continue
@@ -766,7 +766,8 @@ final class MultiClipEditorViewModel: ObservableObject {
 
         if let videoComposition = VideoStorageManager.shared.makeVideoComposition(for: mixComposition,
                                                                                   placements: placements,
-                                                                                  renderSize: renderSize) {
+                                                                                  renderSize: renderSize,
+                                                                                  includeDateOverlay: false) {
             item.videoComposition = videoComposition
         }
 

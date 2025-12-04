@@ -118,7 +118,7 @@ final class MonthlyPlaybackViewModel: ObservableObject {
             
             let item = AVPlayerItem(asset: composition)
             
-            if let videoComposition = VideoStorageManager.shared.makeVideoComposition(for: composition, placements: placements, renderSize: renderSize) {
+            if let videoComposition = VideoStorageManager.shared.makeVideoComposition(for: composition, placements: placements, renderSize: renderSize, includeDateOverlay: false) {
                 item.videoComposition = videoComposition
             }
             

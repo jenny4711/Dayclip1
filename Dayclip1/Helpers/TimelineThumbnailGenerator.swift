@@ -27,6 +27,7 @@ struct TimelineThumbnailResult: @unchecked Sendable {
 struct ClipPlacement {
     let timeRange: CMTimeRange
     let transform: CGAffineTransform
+    let date: Date? // 날짜 정보 (월별 컴파일용)
 }
 
 // MARK: - Timeline Thumbnail Generator

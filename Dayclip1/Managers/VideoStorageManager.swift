@@ -557,7 +557,7 @@ final class VideoStorageManager {
                     try audioTrack.insertTimeRange(timeRange, of: sourceAudio, at: cursor)
                 }
                 let outputRange = CMTimeRange(start: cursor, duration: duration)
-                placements.append(ClipPlacement(timeRange: outputRange, transform: finalTransform))
+                placements.append(ClipPlacement(timeRange: outputRange, transform: finalTransform, date: clip.date))
                 clipTimeRanges.append(outputRange)
                 cursor = CMTimeAdd(cursor, duration)
             } catch {
@@ -582,7 +582,7 @@ final class VideoStorageManager {
             try fileManager.removeItem(at: outputURL)
         }
 
-        guard let exportSession = AVAssetExportSession(asset: mixComposition, presetName: AVAssetExportPresetHighestQuality) else {
+        guard let exportSession = AVAssetExportSession(asset: mixComposition, presetName: AVAssetExportPresetMediumQuality) else {
             throw VideoProcessingError.exportFailed
         }
 
@@ -591,7 +591,7 @@ final class VideoStorageManager {
         sessionBox.session.outputFileType = .mp4
         sessionBox.session.shouldOptimizeForNetworkUse = true
 
-        if let videoComposition = makeVideoComposition(for: mixComposition, placements: placements, renderSize: renderSize) {
+        if let videoComposition = makeVideoComposition(for: mixComposition, placements: placements, renderSize: renderSize, includeDateOverlay: true) {
             sessionBox.session.videoComposition = videoComposition
         }
 
@@ -658,7 +658,7 @@ final class VideoStorageManager {
                     try audioTrack.insertTimeRange(range, of: sourceAudioTrack, at: cursor)
                 }
                 let outputRange = CMTimeRange(start: cursor, duration: range.duration)
-                placements.append(ClipPlacement(timeRange: outputRange, transform: combinedTransform))
+                placements.append(ClipPlacement(timeRange: outputRange, transform: combinedTransform, date: nil))
                 cursor = CMTimeAdd(cursor, range.duration)
             } catch {
                 continue
@@ -707,7 +707,7 @@ final class VideoStorageManager {
             try fileManager.removeItem(at: storedVideoURL)
         }
 
-        guard let exportSession = AVAssetExportSession(asset: mixComposition, presetName: AVAssetExportPresetHighestQuality) else {
+        guard let exportSession = AVAssetExportSession(asset: mixComposition, presetName: AVAssetExportPresetMediumQuality) else {
             throw VideoProcessingError.exportFailed
         }
 
@@ -724,7 +724,8 @@ final class VideoStorageManager {
 
         if let videoComposition = makeVideoComposition(for: mixComposition,
                                                        placements: placements,
-                                                       renderSize: draft.renderSize) {
+                                                       renderSize: draft.renderSize,
+                                                       includeDateOverlay: false) {
             sessionBox.session.videoComposition = videoComposition
         }
 
@@ -768,7 +769,8 @@ final class VideoStorageManager {
 
     func makeVideoComposition(for composition: AVMutableComposition,
                               placements: [ClipPlacement],
-                              renderSize: CGSize) -> AVMutableVideoComposition? {
+                              renderSize: CGSize,
+                              includeDateOverlay: Bool = false) -> AVMutableVideoComposition? {
         guard let videoTrack = composition.tracks(withMediaType: .video).first else { return nil }
 
         let instruction = AVMutableVideoCompositionInstruction()
@@ -784,8 +786,96 @@ final class VideoStorageManager {
         videoComposition.instructions = [instruction]
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
         videoComposition.renderSize = renderSize
+        
+        // 날짜 텍스트 레이어 추가 (export 시에만)
+        if includeDateOverlay {
+            let datePlacements = placements.filter { $0.date != nil }
+            if !datePlacements.isEmpty {
+                let parentLayer = CALayer()
+                parentLayer.frame = CGRect(origin: .zero, size: renderSize)
+                // UIKit 좌표계 사용 (0,0이 왼쪽 상단)
+                parentLayer.isGeometryFlipped = true
+                // 비디오는 1:1 scale로 렌더링되므로 contentsScale을 1.0으로 설정
+                parentLayer.contentsScale = 1.0
+                
+                let videoLayer = CALayer()
+                videoLayer.frame = CGRect(origin: .zero, size: renderSize)
+                videoLayer.contentsScale = 1.0
+                parentLayer.addSublayer(videoLayer)
+                
+                // 각 클립의 날짜 텍스트 레이어 추가
+                // 단일 컨테이너 레이어로 관리하여 겹침 방지
+                let dateContainerLayer = CALayer()
+                dateContainerLayer.frame = CGRect(origin: .zero, size: renderSize)
+                dateContainerLayer.contentsScale = 1.0
+                
+                for placement in datePlacements.sorted(by: { $0.timeRange.start < $1.timeRange.start }) {
+                    guard let date = placement.date else { continue }
+                    let dateLayer = createDateTextLayer(for: date, renderSize: renderSize)
+                    // 정확한 시간 범위에만 표시되도록 설정
+                    // beginTime은 부모 레이어 기준 상대 시간 (초 단위)
+                    dateLayer.beginTime = placement.timeRange.start.seconds
+                    dateLayer.duration = placement.timeRange.duration.seconds
+                    // 레이어가 겹치지 않도록 명시적으로 설정
+                    dateLayer.isHidden = false
+                    dateLayer.opacity = 1.0
+                    // 시간 범위 밖에서는 숨김 처리
+                    dateLayer.fillMode = .removed
+                    dateContainerLayer.addSublayer(dateLayer)
+                }
+                
+                parentLayer.addSublayer(dateContainerLayer)
+                
+                videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
+                    postProcessingAsVideoLayer: videoLayer,
+                    in: parentLayer
+                )
+            }
+        }
 
         return videoComposition
+    }
+    
+    /// 날짜 텍스트 레이어 생성
+    private func createDateTextLayer(for date: Date, renderSize: CGSize) -> CALayer {
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "MMMM d, yyyy"
+        let dateString = dateFormatter.string(from: date)
+        
+        // 텍스트 크기 계산 (더 큰 사이즈: 56pt)
+        let font = UIFont.systemFont(ofSize: 56, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor.white
+        ]
+        let attributedString = NSAttributedString(string: dateString, attributes: attributes)
+        let textSize = attributedString.boundingRect(
+            with: CGSize(width: renderSize.width - 40, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).size
+        
+        // 하단 중앙 배치
+        // AVVideoCompositionCoreAnimationTool은 UIKit 좌표계 사용 (0,0)은 왼쪽 상단
+        let textWidth = textSize.width
+        let textHeight = textSize.height
+        let textX = (renderSize.width - textWidth) / 2
+        // 하단에서 40pt 위 (UIKit 좌표계: Y는 위에서 아래로)
+        let textY: CGFloat = renderSize.height - 40 - textHeight
+        
+        // 텍스트 레이어 생성 (앱과 동일하게 배경/그림자 없음)
+        let textLayer = CATextLayer()
+        textLayer.frame = CGRect(x: textX, y: textY, width: textWidth, height: textHeight)
+        textLayer.string = attributedString
+        textLayer.alignmentMode = .center
+        textLayer.isWrapped = false
+        // 비디오는 1:1 scale로 렌더링되므로 contentsScale을 1.0으로 설정 (선명도 향상)
+        textLayer.contentsScale = 1.0
+        
+        // 그림자 효과 제거 (앱과 동일하게)
+        
+        return textLayer
     }
 }
 
