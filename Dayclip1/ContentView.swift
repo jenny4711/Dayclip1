@@ -53,23 +53,23 @@ struct ContentView: View {
 
             // MARK: - 교체 알림
             .alert(
-                "기존 영상을 교체하시겠습니까?",
+                "Replace existing video?",
                 isPresented: $showReplaceAlert,
                 presenting: pendingDaySelection
             ) { _ in
-                Button("교체", role: .destructive) {
+                Button("Replace", role: .destructive) {
                     presentPickerForPendingDay()
                 }
-                Button("취소", role: .cancel) {
+                Button("Cancel", role: .cancel) {
                     pendingDaySelection = nil
                 }
             } message: { _ in
-                Text("선택한 날짜의 기존 영상을 교체합니다.")
+                Text("This will replace the existing video for the selected date.")
             }
 
             // MARK: - 에러 알림
             .alert(
-                "문제가 발생했어요",
+                "An error occurred",
                 isPresented: Binding(
                     get: { errorMessage != nil },
                     set: { newValue in
@@ -77,7 +77,7 @@ struct ContentView: View {
                     }
                 )
             ) {
-                Button("확인", role: .cancel) {
+                Button("OK", role: .cancel) {
                     errorMessage = nil
                 }
             } message: {
@@ -213,7 +213,7 @@ struct ContentView: View {
     private func startTimelinePlayback() {
         let clips = viewModel.allClips()
         guard !clips.isEmpty else {
-            errorMessage = "저장된 영상이 없습니다."
+            errorMessage = "No saved videos."
             return
         }
         
@@ -282,7 +282,7 @@ struct ContentView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = "이미지를 저장하지 못했습니다.\n\(error.localizedDescription)"
+                    errorMessage = "Failed to save image.\n\(error.localizedDescription)"
                     resetPendingSelection()
                     savingDay = nil
                 }
@@ -312,7 +312,7 @@ struct ContentView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = "영상을 삭제하지 못했습니다.\n\(error.localizedDescription)"
+                errorMessage = "Failed to delete video.\n\(error.localizedDescription)"
             }
         }
 
@@ -344,7 +344,7 @@ struct ContentView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = "영상을 삭제하지 못했습니다.\n\(error.localizedDescription)"
+                errorMessage = "Failed to delete video.\n\(error.localizedDescription)"
             }
         }
 
@@ -391,7 +391,7 @@ struct ContentView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = "편집본을 저장하지 못했습니다.\n\(error.localizedDescription)"
+                errorMessage = "Failed to save edited video.\n\(error.localizedDescription)"
                 resetPendingSelection()
             }
         }
@@ -404,7 +404,7 @@ struct ContentView: View {
     private func presentEditorForExistingClip(_ clip: DayClip) {
         let sources = VideoStorageManager.shared.loadEditingSources(for: clip.date)
         guard !sources.isEmpty else {
-            errorMessage = "편집 세션을 불러올 수 없습니다. 새 영상을 선택해 주세요."
+            errorMessage = "Unable to load editing session. Please select a new video."
             return
         }
 

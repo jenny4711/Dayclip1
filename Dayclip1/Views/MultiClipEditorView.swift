@@ -267,7 +267,7 @@ struct MultiClipEditorView: View {
                     )
                 
                 if !viewModel.hasSelection && !viewModel.isLoading {
-                    Text("선택된 구간이 없습니다.")
+                    Text("No segment selected.")
                         .font(.footnote)
                         .foregroundStyle(.white)
                         .background(.thinMaterial, in: Capsule())

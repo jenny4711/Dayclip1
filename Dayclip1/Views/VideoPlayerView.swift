@@ -86,7 +86,7 @@ struct VideoPlayerView: View {
                             dismiss()
                             onReedit()
                         } label: {
-                            Label("재편집", systemImage: "scissors")
+                            Label("Re-edit", systemImage: "scissors")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
 //                                .padding(.vertical, 14)
@@ -97,7 +97,7 @@ struct VideoPlayerView: View {
                             dismiss()
                             onReplace()
                         } label: {
-                            Label("새 영상 선택", systemImage: "arrow.triangle.2.circlepath")
+                            Label("Select new video", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
 //                                .padding(.vertical, 14)
@@ -107,7 +107,7 @@ struct VideoPlayerView: View {
                         Button(role: .destructive) {
                             showDeleteConfirmation = true
                         } label: {
-                            Label("삭제", systemImage: "trash")
+                            Label("Delete", systemImage: "trash")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
 //                                .padding(.vertical, 14)
@@ -122,7 +122,7 @@ struct VideoPlayerView: View {
                                 showDeleteConfirmation = false
                             }
                         } message: {
-                            Text("영상을 삭제하면 복구할 수 없습니다.")
+                            Text("Deleting this video cannot be undone.")
                         }
                     }
                     .padding(.horizontal, 24)
@@ -135,7 +135,7 @@ struct VideoPlayerView: View {
             if let url = shareURL {
                 ShareSheet(activityItems: [url])
             } else {
-                Text("공유할 영상이 없습니다.")
+                Text("No video to share.")
                     .foregroundStyle(.secondary)
             }
         }

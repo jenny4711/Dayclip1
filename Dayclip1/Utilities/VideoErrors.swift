@@ -18,13 +18,13 @@ enum VideoStorageError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .assetUnavailable:
-            return "선택한 영상을 불러올 수 없습니다."
+            return "Unable to load the selected video."
         case .thumbnailCreationFailed:
-            return "영상 썸네일을 생성할 수 없습니다."
+            return "Unable to create video thumbnail."
         case .imageConversionFailed:
-            return "이미지를 비디오로 변환하는 중 오류가 발생했습니다."
+            return "An error occurred while converting image to video."
         case .imageLoadFailed:
-            return "선택한 이미지를 불러올 수 없습니다."
+            return "Unable to load the selected image."
         }
     }
 }
@@ -42,17 +42,17 @@ enum VideoProcessingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingDay:
-            return "편집을 저장할 날짜 정보를 확인할 수 없습니다."
+            return "Unable to verify date information for saving the edit."
         case .noSelectedSegments:
-            return "선택된 영상 구간이 없습니다."
+            return "No video segments selected."
         case .unableToCreateTrack:
-            return "영상 합성을 위한 트랙을 만들 수 없습니다."
+            return "Unable to create track for video composition."
         case .exportFailed:
-            return "편집본을 내보내는 중 오류가 발생했습니다."
+            return "An error occurred while exporting the edited video."
         case .backgroundTrackMissing:
-            return "선택한 배경 음악 파일을 찾을 수 없습니다."
+            return "Unable to find the selected background music file."
         case .backgroundTrackLoadFailed:
-            return "배경 음악을 불러오는 중 문제가 발생했습니다."
+            return "A problem occurred while loading background music."
         }
     }
 }

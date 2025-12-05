@@ -30,7 +30,7 @@ struct MonthlyPlaybackView: View {
             Color.black.ignoresSafeArea()
 
             if session.clips.isEmpty {
-                Text("저장된 영상이 없습니다.")
+                Text("No saved videos.")
                     .foregroundStyle(.white)
             } else {
                 AspectFillVideoPlayer(player: viewModel.player)
@@ -40,7 +40,7 @@ struct MonthlyPlaybackView: View {
                 infoOverlay
                 
                 if viewModel.isLoading {
-                    ProgressView("영상 준비 중...")
+                    ProgressView("Preparing video...")
                         .progressViewStyle(.circular)
                         .tint(.white)
                         .padding(20)
@@ -57,7 +57,7 @@ struct MonthlyPlaybackView: View {
         .onDisappear { viewModel.stop() }
         .overlay(alignment: .center) {
             if isExportingShare {
-                ProgressView("영상 준비 중...")
+                ProgressView("Preparing video...")
                     .progressViewStyle(.circular)
                     .tint(.white)
                     .padding(20)
@@ -74,17 +74,17 @@ struct MonthlyPlaybackView: View {
             if let url = shareURL {
                 ShareSheet(activityItems: [url])
             } else {
-                Text("공유할 영상이 없습니다.")
+                Text("No video to share.")
                     .foregroundStyle(.secondary)
                     .padding()
             }
         }
-        .alert("공유할 수 없습니다.", isPresented: Binding(get: {
+        .alert("Unable to share.", isPresented: Binding(get: {
             shareError != nil
         }, set: { newValue in
             if !newValue { shareError = nil }
         }), actions: {
-            Button("확인", role: .cancel) {
+            Button("OK", role: .cancel) {
                 shareError = nil
             }
         }, message: {
