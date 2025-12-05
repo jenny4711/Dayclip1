@@ -145,6 +145,22 @@ final class VideoStorageManager {
             throw VideoStorageError.thumbnailCreationFailed
         }
         
+        // 편집 세션 소스로 원본 이미지 저장 (편집 페이지에서 사용하기 위해)
+        let editingDirectory = editingDirectory(for: normalizedDate)
+        if !fileManager.fileExists(atPath: editingDirectory.path) {
+            try fileManager.createDirectory(at: editingDirectory, withIntermediateDirectories: true)
+        }
+        
+        // 편집 디렉토리에 원본 이미지 복사
+        let editingImageURL = editingDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(imageExtension)
+        
+        try fileManager.copyItem(at: tempImageURL, to: editingImageURL)
+        
+        // 편집 세션 소스 저장
+        saveEditingSources([editingImageURL], for: normalizedDate)
+        
         // 임시 비디오 URL 생성 (나중에 실제 비디오로 교체됨)
         let tempVideoURL = targetDirectory.appendingPathComponent("clip").appendingPathExtension("mp4")
         
@@ -153,7 +169,7 @@ final class VideoStorageManager {
             guard let self = self else { return }
             do {
                 let videoURL = try await self.convertImageToVideo(imageURL: tempImageURL, outputURL: tempVideoURL, duration: 1.0)
-                // 변환 완료 후 임시 이미지 파일 삭제
+                // 변환 완료 후 임시 이미지 파일 삭제 (편집 디렉토리의 이미지는 유지)
                 try? self.fileManager.removeItem(at: tempImageURL)
             } catch {
                 // 에러 발생 시 로그만 남기고 계속 진행
@@ -357,16 +373,21 @@ final class VideoStorageManager {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
-        // 이미 같은 디렉토리에 있으면 복사 불필요
-        if sourceURL.deletingLastPathComponent() == directory {
-            return sourceURL
-        }
-
         // 이미지 파일인지 확인
         let isImageFile = ["jpg", "jpeg", "png", "heic", "heif"].contains(sourceURL.pathExtension.lowercased())
         
         if isImageFile {
-            // 이미지는 비디오로 변환
+            // 이미지는 항상 비디오로 변환 (편집 디렉토리에 있더라도)
+            // 이미 변환된 비디오가 있는지 확인 (같은 이름의 .mp4 파일)
+            let videoFilename = sourceURL.deletingPathExtension().lastPathComponent + ".mp4"
+            let existingVideoURL = directory.appendingPathComponent(videoFilename)
+            
+            if fileManager.fileExists(atPath: existingVideoURL.path) {
+                // 이미 변환된 비디오가 있으면 재사용
+                return existingVideoURL
+            }
+            
+            // 비디오로 변환
             let destination = directory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("mp4")
@@ -383,6 +404,11 @@ final class VideoStorageManager {
             }
             return videoURL
         } else {
+            // 비디오 파일인 경우
+            // 이미 같은 디렉토리에 있으면 복사 불필요
+            if sourceURL.deletingLastPathComponent() == directory {
+                return sourceURL
+            }
             // 비디오 파일은 그대로 복사
             let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension
             let destination = directory
