@@ -115,8 +115,8 @@ struct DayCellView: View {
                     .fill(day.backgroundColor)
             }
 
-            // Thumbnail - fill entire cell if present (현재 달 날짜에만 표시)
-            if let thumbnail = day.thumbnail, day.kind == .current {
+            // Thumbnail - fill entire cell if present
+            if let thumbnail = day.thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
                     .scaledToFill()

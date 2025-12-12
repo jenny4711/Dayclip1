@@ -115,8 +115,7 @@ final class CalendarViewModel: ObservableObject {
                     let isToday = calendar.isDate(date, inSameDayAs: today)
                     let isFuture = date > today
                     let clip = clips[normalizedDate(date)]
-                    // 이전 달 날짜에는 썸네일을 표시하지 않음
-                    days.append(CalendarDay(date: date, kind: .previous, isToday: isToday, isFuture: isFuture, hasClip: clip != nil, thumbnail: nil))
+                    days.append(CalendarDay(date: date, kind: .previous, isToday: isToday, isFuture: isFuture, hasClip: clip != nil, thumbnail: clip?.thumbnail))
                 }
             }
         }
@@ -136,8 +135,7 @@ final class CalendarViewModel: ObservableObject {
                 let isToday = calendar.isDate(date, inSameDayAs: today)
                 let isFuture = date > today
                 let clip = clips[normalizedDate(date)]
-                // 다음 달 날짜에는 썸네일을 표시하지 않음
-                days.append(CalendarDay(date: date, kind: .next, isToday: isToday, isFuture: isFuture, hasClip: clip != nil, thumbnail: nil))
+                days.append(CalendarDay(date: date, kind: .next, isToday: isToday, isFuture: isFuture, hasClip: clip != nil, thumbnail: clip?.thumbnail))
             } else {
                 break
             }

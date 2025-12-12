@@ -23,7 +23,6 @@ final class VideoStorageManager {
     static let shared = VideoStorageManager()
 
     private let fileManager = FileManager.default
-    private let baseDirectory: URL
     private let clipsDirectory: URL
     private let backgroundTracksDirectory: URL
     private let editingSessionsDirectory: URL
@@ -31,13 +30,8 @@ final class VideoStorageManager {
     private let calendar: Calendar = Calendar(identifier: .gregorian)
 
     private init() {
-        // applicationSupportDirectory만 사용 (temporaryDirectory fallback 제거)
-        // applicationSupportDirectory는 앱 업데이트 시에도 유지됨
-        guard let appSupport = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
-            fatalError("Failed to create application support directory")
-        }
-        
-        baseDirectory = appSupport.appendingPathComponent("Dayclip", isDirectory: true)
+        let appSupport = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let baseDirectory = appSupport?.appendingPathComponent("Dayclip", isDirectory: true) ?? fileManager.temporaryDirectory.appendingPathComponent("Dayclip", isDirectory: true)
 
         clipsDirectory = baseDirectory.appendingPathComponent("Clips", isDirectory: true)
         backgroundTracksDirectory = baseDirectory.appendingPathComponent("BackgroundTracks", isDirectory: true)
@@ -71,26 +65,6 @@ final class VideoStorageManager {
         folderFormatter.calendar = calendar
         folderFormatter.locale = Locale.current
         folderFormatter.dateFormat = "yyyy-MM-dd"
-    }
-    
-    // MARK: - Path Helpers
-    
-    /// 절대 경로를 baseDirectory 기준 상대 경로로 변환
-    func relativePath(from absoluteURL: URL) -> String? {
-        let absolutePath = absoluteURL.path
-        let basePath = baseDirectory.path
-        
-        guard absolutePath.hasPrefix(basePath) else {
-            return nil
-        }
-        
-        let relativePath = String(absolutePath.dropFirst(basePath.count))
-        return relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath
-    }
-    
-    /// 상대 경로를 절대 URL로 변환
-    func absoluteURL(from relativePath: String) -> URL {
-        return baseDirectory.appendingPathComponent(relativePath)
     }
 
     func storeVideo(from item: PhotosPickerItem, for date: Date) async throws -> DayClip {
@@ -187,26 +161,18 @@ final class VideoStorageManager {
         // 편집 세션 소스 저장
         saveEditingSources([editingImageURL], for: normalizedDate)
         
-        // 임시 비디오 URL 생성 (나중에 실제 비디오로 교체됨)
-        let tempVideoURL = targetDirectory.appendingPathComponent("clip").appendingPathExtension("mp4")
+        // 비디오 URL 생성
+        let videoURL = targetDirectory.appendingPathComponent("clip").appendingPathExtension("mp4")
         
-        // 백그라운드에서 이미지를 비디오로 변환 (1초)
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self = self else { return }
-            do {
-                let videoURL = try await self.convertImageToVideo(imageURL: tempImageURL, outputURL: tempVideoURL, duration: 1.0)
-                // 변환 완료 후 임시 이미지 파일 삭제 (편집 디렉토리의 이미지는 유지)
-                try? self.fileManager.removeItem(at: tempImageURL)
-            } catch {
-                // 에러 발생 시 로그만 남기고 계속 진행
-                #if DEBUG
-                print("Failed to convert image to video: \(error)")
-                #endif
-            }
-        }
+        // 이미지를 비디오로 변환 (1초) - 변환이 완료될 때까지 기다림
+        // 이렇게 해야 makeMonthlyComposition에서 파일이 존재하고 duration이 올바르게 로드됨
+        let convertedVideoURL = try await convertImageToVideo(imageURL: tempImageURL, outputURL: videoURL, duration: 1.0)
         
-        // 즉시 DayClip 반환 (임시 비디오 URL 사용, 나중에 실제 비디오로 교체됨)
-        return DayClip(date: normalizedDate, videoURL: tempVideoURL, thumbnailURL: thumbnailURL, thumbnail: thumbnailImage, createdAt: Date())
+        // 변환 완료 후 임시 이미지 파일 삭제 (편집 디렉토리의 이미지는 유지)
+        try? fileManager.removeItem(at: tempImageURL)
+        
+        // 비디오 변환이 완료된 후 DayClip 반환
+        return DayClip(date: normalizedDate, videoURL: convertedVideoURL, thumbnailURL: thumbnailURL, thumbnail: thumbnailImage, createdAt: Date())
     }
     
     /// 이미지를 정적 비디오로 변환합니다.
@@ -275,8 +241,9 @@ final class VideoStorageManager {
         
         // 각 프레임에 동일한 이미지 추가
         for frameIndex in 0..<totalFrames {
-            guard writerInput.isReadyForMoreMediaData else {
-                continue
+            // 프레임이 준비될 때까지 대기
+            while !writerInput.isReadyForMoreMediaData {
+                try await Task.sleep(nanoseconds: 10_000_000) // 0.01초 대기
             }
             
             var pixelBuffer: CVPixelBuffer?
@@ -287,7 +254,7 @@ final class VideoStorageManager {
             )
             
             guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
-                continue
+                throw VideoStorageError.imageConversionFailed
             }
             
             CVPixelBufferLockBaseAddress(buffer, [])
@@ -313,7 +280,11 @@ final class VideoStorageManager {
                 in: CGRect(origin: CGPoint(x: offsetX, y: offsetY), size: scaledSize)
             )
             
-            let presentationTime = CMTime(value: Int64(frameIndex), timescale: fps)
+            // presentationTime을 정확히 계산: frameIndex / fps
+            // 마지막 프레임이 정확히 duration에 도달하도록 함
+            let frameTime = Double(frameIndex) / Double(fps)
+            let presentationTime = CMTime(seconds: frameTime, preferredTimescale: CMTimeScale(fps))
+            
             if !adaptor.append(buffer, withPresentationTime: presentationTime) {
                 throw VideoStorageError.imageConversionFailed
             }
@@ -329,6 +300,28 @@ final class VideoStorageManager {
                     continuation.resume(throwing: writer.error ?? VideoStorageError.imageConversionFailed)
                 }
             }
+        }
+        
+        // 비디오 파일이 완전히 작성되었는지 확인하고 duration 검증
+        // 파일 시스템이 완전히 동기화될 때까지 약간의 대기
+        try await Task.sleep(nanoseconds: 100_000_000) // 0.1초 대기
+        
+        // 생성된 비디오의 실제 duration 확인
+        let createdAsset = AVAsset(url: outputURL)
+        let actualDuration = try await createdAsset.load(.duration)
+        
+        #if DEBUG
+        print("🎬 Created video duration: \(actualDuration.seconds) seconds (expected: \(duration))")
+        #endif
+        
+        // Duration이 예상과 크게 다르면 경고 (비디오는 생성되었으므로 계속 진행)
+        let durationDiff = abs(actualDuration.seconds - duration)
+        if durationDiff >= 0.1 {
+            #if DEBUG
+            print("⚠️ Duration mismatch: expected \(duration), got \(actualDuration.seconds)")
+            #endif
+            // 작은 차이는 허용하지만, 0.5초 차이는 문제
+            // 하지만 비디오는 생성되었으므로 계속 진행
         }
         
         return outputURL
@@ -573,9 +566,31 @@ final class VideoStorageManager {
         let renderSize = CGSize(width: 1080, height: 1920)
 
         for clip in clips.sorted(by: { $0.date < $1.date }) {
+            // 파일 존재 여부 확인
+            guard fileManager.fileExists(atPath: clip.videoURL.path) else {
+                #if DEBUG
+                print("⚠️ Video file does not exist: \(clip.videoURL.path)")
+                #endif
+                continue
+            }
+            
             let asset = AVAsset(url: clip.videoURL)
-            guard let sourceVideo = try? await asset.loadTracks(withMediaType: .video).first else { continue }
+            guard let sourceVideo = try? await asset.loadTracks(withMediaType: .video).first else {
+                #if DEBUG
+                print("⚠️ Failed to load video track: \(clip.videoURL.path)")
+                #endif
+                continue
+            }
+            
             let duration = try await asset.load(.duration)
+            
+            // Duration이 유효한지 확인 (0보다 크고 유한한 값이어야 함)
+            guard duration.isValid && duration.isNumeric && duration.seconds > 0 && duration.seconds.isFinite else {
+                #if DEBUG
+                print("⚠️ Invalid duration for clip: \(clip.videoURL.path), duration: \(duration.seconds)")
+                #endif
+                continue
+            }
             let baseTransform = (try? await sourceVideo.load(.preferredTransform)) ?? .identity
             let naturalSize = try await sourceVideo.load(.naturalSize)
             let renderRect = CGRect(origin: .zero, size: naturalSize).applying(baseTransform)
