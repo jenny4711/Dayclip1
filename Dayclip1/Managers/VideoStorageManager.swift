@@ -559,7 +559,7 @@ final class VideoStorageManager {
             // trackSize is already in the coordinate system after baseTransform
             let scaleX = renderSize.width / trackSize.width
             let scaleY = renderSize.height / trackSize.height
-            let scale = max(scaleX, scaleY) // Use max to fill the entire frame
+            let scale = min(scaleX, scaleY) // Use min to fit entire video without cropping (aspect fit)
             
             // Calculate translation to center the video
             let scaledWidth = trackSize.width * scale
@@ -769,6 +769,14 @@ final class VideoStorageManager {
             }
         }
 
+        // Export 완료 후 파일이 완전히 쓰여질 때까지 짧은 지연
+        try await Task.sleep(nanoseconds: 100_000_000) // 0.1초
+        
+        // 파일이 존재하고 접근 가능한지 확인
+        guard fileManager.fileExists(atPath: storedVideoURL.path) else {
+            throw VideoProcessingError.exportFailed
+        }
+        
         let thumbnailImage = try await generateThumbnail(for: storedVideoURL)
         let thumbnailURL = targetDirectory.appendingPathComponent("thumbnail.jpg")
 

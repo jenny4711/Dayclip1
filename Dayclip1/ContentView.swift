@@ -3,7 +3,7 @@
 //  Dayclip1
 //
 //  Created by Ji y LEE on 11/7/25.
-//
+//ㄷㄷ
 
 import SwiftUI
 import PhotosUI
