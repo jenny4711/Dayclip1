@@ -36,6 +36,7 @@ actor ClipStore {
 
     func fetchAll() async throws -> [ClipMetadata] {
         let context = self.context
+        let storageManager = VideoStorageManager.shared
         return try await context.perform {
             let request = NSFetchRequest<NSManagedObject>(entityName: "ClipEntity")
             request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: true)]
@@ -51,8 +52,50 @@ actor ClipStore {
                     return nil
                 }
 
-                let videoURL = URL(fileURLWithPath: videoPath)
-                let thumbnailURL = URL(fileURLWithPath: thumbPath)
+                // 경로가 절대 경로인지 상대 경로인지 확인
+                let videoURL: URL
+                let thumbnailURL: URL
+                
+                if videoPath.hasPrefix("/") {
+                    // 절대 경로인 경우: 상대 경로로 변환하여 저장하고, 절대 URL 생성
+                    let absoluteURL = URL(fileURLWithPath: videoPath)
+                    if let relativePath = storageManager.relativePath(from: absoluteURL) {
+                        // 상대 경로로 변환 가능하면 저장
+                        object.setValue(relativePath, forKey: "videoPath")
+                    }
+                    videoURL = absoluteURL
+                } else {
+                    // 상대 경로인 경우: 절대 URL 생성
+                    videoURL = storageManager.absoluteURL(from: videoPath)
+                }
+                
+                if thumbPath.hasPrefix("/") {
+                    // 절대 경로인 경우: 상대 경로로 변환하여 저장하고, 절대 URL 생성
+                    let absoluteURL = URL(fileURLWithPath: thumbPath)
+                    if let relativePath = storageManager.relativePath(from: absoluteURL) {
+                        // 상대 경로로 변환 가능하면 저장
+                        object.setValue(relativePath, forKey: "thumbnailPath")
+                    }
+                    thumbnailURL = absoluteURL
+                } else {
+                    // 상대 경로인 경우: 절대 URL 생성
+                    thumbnailURL = storageManager.absoluteURL(from: thumbPath)
+                }
+                
+                // 파일 존재 여부 확인
+                let fileManager = FileManager.default
+                guard fileManager.fileExists(atPath: videoURL.path),
+                      fileManager.fileExists(atPath: thumbnailURL.path) else {
+                    // 파일이 없으면 해당 레코드 삭제
+                    context.delete(object)
+                    return nil
+                }
+                
+                // 변경사항 저장
+                if context.hasChanges {
+                    try? context.save()
+                }
+                
                 return ClipMetadata(date: date, videoURL: videoURL, thumbnailURL: thumbnailURL, createdAt: createdAt)
             }
         }
@@ -60,6 +103,7 @@ actor ClipStore {
 
     func upsert(_ metadata: ClipMetadata) async throws {
         let context = self.context
+        let storageManager = VideoStorageManager.shared
         try await context.perform {
             let request = NSFetchRequest<NSManagedObject>(entityName: "ClipEntity")
             request.predicate = NSPredicate(format: "date == %@", metadata.date as NSDate)
@@ -74,8 +118,13 @@ actor ClipStore {
             }
 
             object.setValue(metadata.date, forKey: "date")
-            object.setValue(metadata.videoURL.path, forKey: "videoPath")
-            object.setValue(metadata.thumbnailURL.path, forKey: "thumbnailPath")
+            
+            // 상대 경로로 저장 (앱 업데이트 시에도 유지됨)
+            let videoRelativePath = storageManager.relativePath(from: metadata.videoURL) ?? metadata.videoURL.path
+            let thumbnailRelativePath = storageManager.relativePath(from: metadata.thumbnailURL) ?? metadata.thumbnailURL.path
+            
+            object.setValue(videoRelativePath, forKey: "videoPath")
+            object.setValue(thumbnailRelativePath, forKey: "thumbnailPath")
             object.setValue(metadata.createdAt, forKey: "createdAt")
 
             if context.hasChanges {

@@ -23,6 +23,7 @@ final class VideoStorageManager {
     static let shared = VideoStorageManager()
 
     private let fileManager = FileManager.default
+    private let baseDirectory: URL
     private let clipsDirectory: URL
     private let backgroundTracksDirectory: URL
     private let editingSessionsDirectory: URL
@@ -30,8 +31,13 @@ final class VideoStorageManager {
     private let calendar: Calendar = Calendar(identifier: .gregorian)
 
     private init() {
-        let appSupport = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let baseDirectory = appSupport?.appendingPathComponent("Dayclip", isDirectory: true) ?? fileManager.temporaryDirectory.appendingPathComponent("Dayclip", isDirectory: true)
+        // applicationSupportDirectory만 사용 (temporaryDirectory fallback 제거)
+        // applicationSupportDirectory는 앱 업데이트 시에도 유지됨
+        guard let appSupport = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            fatalError("Failed to create application support directory")
+        }
+        
+        baseDirectory = appSupport.appendingPathComponent("Dayclip", isDirectory: true)
 
         clipsDirectory = baseDirectory.appendingPathComponent("Clips", isDirectory: true)
         backgroundTracksDirectory = baseDirectory.appendingPathComponent("BackgroundTracks", isDirectory: true)
@@ -65,6 +71,26 @@ final class VideoStorageManager {
         folderFormatter.calendar = calendar
         folderFormatter.locale = Locale.current
         folderFormatter.dateFormat = "yyyy-MM-dd"
+    }
+    
+    // MARK: - Path Helpers
+    
+    /// 절대 경로를 baseDirectory 기준 상대 경로로 변환
+    func relativePath(from absoluteURL: URL) -> String? {
+        let absolutePath = absoluteURL.path
+        let basePath = baseDirectory.path
+        
+        guard absolutePath.hasPrefix(basePath) else {
+            return nil
+        }
+        
+        let relativePath = String(absolutePath.dropFirst(basePath.count))
+        return relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath
+    }
+    
+    /// 상대 경로를 절대 URL로 변환
+    func absoluteURL(from relativePath: String) -> URL {
+        return baseDirectory.appendingPathComponent(relativePath)
     }
 
     func storeVideo(from item: PhotosPickerItem, for date: Date) async throws -> DayClip {
